@@ -149,14 +149,23 @@
   const files = {};
   const canMakeUrls = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && typeof Blob !== 'undefined';
   const iterate = (list) => { const l = list.slice(); return { hasNext: () => l.length > 0, next: () => l.shift() }; };
-  function makeFolder(name) {
+  function makeFolder(name, parentFolder) {
     const id = newId('FOLDER');
+    let parentOf = parentFolder || null;
     const folder = {
       children: [], files: [],
       getId: () => id,
       getName: () => name,
+      setName: (n) => { name = String(n); return folder; },
       getUrl: () => 'https://drive.google.com/drive/folders/' + id,
-      createFolder: (n) => { const f = makeFolder(n); folder.children.push(f); return f; },
+      getParents: () => iterate(parentOf ? [parentOf] : []),
+      moveTo: (dest) => {
+        if (parentOf) parentOf.children = parentOf.children.filter((c) => c !== folder);
+        dest.children.push(folder);
+        parentOf = dest;
+        return folder;
+      },
+      createFolder: (n) => { const f = makeFolder(n, folder); folder.children.push(f); return f; },
       getFoldersByName: (n) => iterate(folder.children.filter((c) => c.getName() === n)),
       createFile: (blob) => {
         const fid = newId('FILE');
@@ -199,7 +208,8 @@
     return folder;
   }
   const DriveApp = {
-    createFolder: (name) => makeFolder(name),
+    createFolder: (name) => makeFolder(name, null),
+    getFoldersByName: (name) => iterate(Object.keys(folders).map((k) => folders[k]).filter((f) => f.getName() === name)),
     getFolderById: (id) => { if (!folders[id]) throw new Error('No folder with ID ' + id + ' (mock).'); return folders[id]; },
     getFileById: (id) => { if (!files[id]) throw new Error('No file with ID ' + id + ' (mock).'); return files[id]; }
   };

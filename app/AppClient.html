@@ -1,16 +1,80 @@
 <script>
 /**
  * AppClient · Owner: Member 5 (integration)
- * Navigation, server calls, toasts and dialogs shared by every page.
- * Each member's page registers itself with App.registerPage('id', { show() }).
+ * Navigation, server calls, icons, motion, toasts and dialogs shared by every page.
+ * Each page registers itself with App.registerPage('id', { show() }).
+ * Pages talk to each other through App.on(event, fn) / App.emit(event, value).
  */
 const App = (() => {
-  // Member 5: switch this to 'overview' once the Overview page exists.
-  const DEFAULT_PAGE = 'suppliers';
+  const DEFAULT_PAGE = 'overview';
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const state = { info: null, current: null, pages: {} };
+  const state = { info: null, current: null, pages: {}, listeners: {} };
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  /** Calls a server function and returns a Promise. */
+  /* ------------------------------------------------------------ Icons */
+  const C = (cx, cy, r) => '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '"/>';
+  const P = (d) => '<path d="' + d + '"/>';
+  const ICONS = {
+    dashboard: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+    building: P('M3 21h18') + P('M5 21V7l7-4 7 4v14') + P('M9 9h1M14 9h1M9 13h1M14 13h1M9 17h1M14 17h1'),
+    sparkles: P('M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z') + P('M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z'),
+    clock: C(12, 12, 9) + P('M12 7v5l3 2'),
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/>' + P('M3 7l9 6 9-6'),
+    search: C(11, 11, 7) + P('M20 20l-3.5-3.5'),
+    plus: P('M12 5v14M5 12h14'),
+    chevronRight: P('M9 6l6 6-6 6'),
+    chevronLeft: P('M15 6l-6 6 6 6'),
+    chevronDown: P('M6 9l6 6 6-6'),
+    arrowRight: P('M5 12h14M13 6l6 6-6 6'),
+    arrowLeft: P('M19 12H5M11 6l-6 6 6 6'),
+    x: P('M6 6l12 12M18 6L6 18'),
+    check: P('M5 12.5l4.5 4.5L19 7.5'),
+    checkCircle: C(12, 12, 9) + P('M8 12.5l2.5 2.5L16 9.5'),
+    xCircle: C(12, 12, 9) + P('M9 9l6 6M15 9l-6 6'),
+    alert: P('M12 3l10 18H2z') + P('M12 10v4M12 17h.01'),
+    info: C(12, 12, 9) + P('M12 11v5M12 8h.01'),
+    upload: P('M12 16V4M7 9l5-5 5 5') + P('M5 20h14'),
+    eye: P('M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z') + C(12, 12, 3),
+    history: P('M3 12a9 9 0 1 0 3-6.7') + P('M3 4v4h4') + P('M12 8v4l3 2'),
+    edit: P('M4 20h4L19 9l-4-4L4 16z') + P('M13.5 6.5l4 4'),
+    list: P('M8 6h13M8 12h13M8 18h13') + P('M3.5 6h.01M3.5 12h.01M3.5 18h.01'),
+    folder: P('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'),
+    refresh: P('M20 12a8 8 0 1 1-2.3-5.7') + P('M20 4v5h-5'),
+    user: C(12, 8, 4) + P('M4 21a8 8 0 0 1 16 0'),
+    database: '<ellipse cx="12" cy="6" rx="8" ry="3"/>' + P('M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6') + P('M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'),
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/>' + P('M3 10h18M8 3v4M16 3v4'),
+    menu: P('M4 7h16M4 12h16M4 17h16'),
+    file: P('M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z') + P('M14 3v5h5'),
+    contract: P('M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z') + P('M14 3v5h5') + P('M8.5 16c1.2-1.4 2-1.4 2.6 0s1.5 1.4 2.9 0'),
+    licence: '<rect x="3" y="5" width="18" height="14" rx="2"/>' + C(8.5, 11, 2) + P('M6 16h5M14 9.5h4M14 13h4'),
+    certificate: C(12, 9, 5) + P('M9 13.2L7.5 21l4.5-2.5 4.5 2.5-1.5-7.8'),
+    shield: P('M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z') + P('M8.5 12l2.5 2.5 4.5-5'),
+    bolt: P('M13 2L4 14h7l-1 8 9-12h-7z'),
+    chip: '<rect x="6" y="6" width="12" height="12" rx="2"/>' + P('M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4'),
+    truck: P('M3 6h11v10H3z') + P('M14 10h4l3 3v3h-7') + C(7, 18, 2) + C(17, 18, 2),
+    droplet: P('M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z'),
+    flag: P('M5 21V4h12l-2 4 2 4H5'),
+    send: P('M22 2L11 13') + P('M22 2l-7 20-4-9-9-4z'),
+    layers: P('M12 3l9 5-9 5-9-5z') + P('M3 13l9 5 9-5'),
+    external: P('M14 4h6v6') + P('M10 14L20 4') + P('M20 14v6H4V4h6'),
+    inbox: P('M3 13h5l2 3h4l2-3h5') + P('M5 5h14l2 8v6H3v-6z'),
+    cog: C(12, 12, 3) + P('M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z')
+  };
+
+  function icon(name, size, extra) {
+    const s = size || 18;
+    return '<svg class="i" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' +
+      (s <= 14 ? 2.2 : 1.9) + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' + (extra || '') + '>' + (ICONS[name] || ICONS.file) + '</svg>';
+  }
+
+  /** Replaces <span data-icon="name" data-size="16"> placeholders inside root with SVG icons. */
+  function hydrateIcons(root) {
+    (root || document).querySelectorAll('[data-icon]').forEach((el) => {
+      el.outerHTML = icon(el.dataset.icon, Number(el.dataset.size) || 18);
+    });
+  }
+
+  /* ----------------------------------------------------------- Server */
   function api(fn, ...args) {
     return new Promise((resolve, reject) => {
       google.script.run
@@ -19,41 +83,97 @@ const App = (() => {
     });
   }
 
+  /* ---------------------------------------------------------- Formats */
   function esc(value) {
     return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, (c) => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
-
-  /** '2026-11-11T09:05:00+08:00' -> '11 Nov 2026, 09:05' (Malaysia time, as stored). */
   function fmtDateTime(iso) {
     const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
     if (!m) return String(iso || '');
     return Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1] + (m[4] ? ', ' + m[4] + ':' + m[5] : '');
   }
-
   function fmtDate(iso) {
     const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
     return m ? Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1] : String(iso || '');
   }
-
   function fmtBytes(n) {
     const size = Number(n) || 0;
     if (size < 1024) return size + ' B';
     if (size < 1024 * 1024) return Math.round(size / 1024) + ' KB';
     return (size / 1024 / 1024).toFixed(1) + ' MB';
   }
+  /** True for extraction states that mean "the AI hasn't read this file yet". */
+  function isWaitingForAi(status) {
+    return ['QUEUED', 'PROCESSING', '', undefined, null].indexOf(status) >= 0;
+  }
 
+  function initials(name) {
+    const words = String(name || '').replace(/\b(Sdn|Bhd|Berhad)\b\.?/gi, '').split(/[^A-Za-z0-9]+/).filter(Boolean);
+    if (words.length === 1) {
+      const caps = words[0].match(/[A-Z]/g);
+      return (caps && caps.length > 1 ? caps[0] + caps[1] : words[0].slice(0, 2)).toUpperCase();
+    }
+    return ((words[0] || '?').charAt(0) + (words[1] || '').charAt(0)).toUpperCase();
+  }
+
+  /* ----------------------------------------------------------- Motion */
+  /** Restarts an entrance animation on el: 'enter' (fade up), 'enter-right' or 'enter-left'. */
+  function animateIn(el, cls) {
+    if (!el) return;
+    ['enter', 'enter-right', 'enter-left'].forEach((c) => el.classList.remove(c));
+    void el.offsetWidth;
+    el.classList.add(cls || 'enter');
+  }
+
+  /** Counts every [data-count] number inside root up from zero. */
+  function countUp(root) {
+    (root || document).querySelectorAll('[data-count]').forEach((el) => {
+      const target = Number(el.dataset.count) || 0;
+      const suffix = el.dataset.suffix || '';
+      if (reduceMotion || target === 0) { el.textContent = target + suffix; return; }
+      const start = performance.now();
+      const duration = Math.min(900, 400 + target * 25);
+      const tick = (now) => {
+        const p = Math.min(1, (now - start) / duration);
+        el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + suffix;
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
+  function addRipple(e) {
+    const target = e.target.closest('.btn, .nav-item, button.tile, button.list-row');
+    if (!target || target.disabled || reduceMotion) return;
+    const rect = target.getBoundingClientRect();
+    const size = Math.max(rect.width, rect.height) * 2.2;
+    const dot = document.createElement('span');
+    dot.className = 'ripple';
+    dot.style.width = dot.style.height = size + 'px';
+    dot.style.left = (e.clientX - rect.left - size / 2) + 'px';
+    dot.style.top = (e.clientY - rect.top - size / 2) + 'px';
+    target.appendChild(dot);
+    setTimeout(() => dot.remove(), 600);
+  }
+
+  /* ----------------------------------------------------------- Toasts */
   function toast(message, kind) {
     const region = document.getElementById('toast-region');
     const el = document.createElement('div');
     el.className = 'toast' + (kind ? ' ' + kind : '');
-    el.textContent = message;
+    el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    el.innerHTML = icon(kind === 'error' ? 'xCircle' : (kind === 'ok' ? 'checkCircle' : 'info'), 18) + '<span>' + esc(message) + '</span>';
     region.appendChild(el);
-    setTimeout(() => el.remove(), kind === 'error' ? 8000 : 4500);
+    setTimeout(() => {
+      el.classList.add('leaving');
+      setTimeout(() => el.remove(), 230);
+    }, kind === 'error' ? 8000 : 4200);
   }
 
+  /* ---------------------------------------------------------- Dialogs */
   /**
-   * Opens a dialog. actions: [{ label, kind: 'primary'|'secondary'|'danger', onClick(ctx) }]
+   * Opens a dialog. actions: [{ label, kind: 'primary'|'secondary'|'danger', onClick(ctx), busyLabel }]
    * onClick may return a Promise; return false to keep the dialog open.
    */
   function modal(opts) {
@@ -64,21 +184,22 @@ const App = (() => {
     backdrop.innerHTML =
       '<div class="modal' + (opts.wide ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-labelledby="' + id + '">' +
         '<div class="modal-head"><h2 class="modal-title" id="' + id + '">' + esc(opts.title) + '</h2>' +
-        '<button type="button" class="btn btn-ghost btn-icon" data-close aria-label="Close">' +
-        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>' +
-        '<div class="modal-body"></div>' +
-        '<div class="modal-foot"></div>' +
-      '</div>';
+        '<button type="button" class="btn btn-ghost btn-icon" data-close aria-label="Close">' + icon('x', 18) + '</button></div>' +
+        '<div class="modal-body"></div><div class="modal-foot"></div></div>';
     const body = backdrop.querySelector('.modal-body');
     if (typeof opts.body === 'string') body.innerHTML = opts.body; else if (opts.body) body.appendChild(opts.body);
     const foot = backdrop.querySelector('.modal-foot');
     const previousFocus = document.activeElement;
+    let closed = false;
     const ctx = {
       el: backdrop,
       body: body,
       close() {
-        backdrop.remove();
+        if (closed) return;
+        closed = true;
         document.removeEventListener('keydown', onKey);
+        backdrop.classList.add('closing');
+        setTimeout(() => backdrop.remove(), 190);
         if (previousFocus && previousFocus.focus) previousFocus.focus();
       }
     };
@@ -104,8 +225,31 @@ const App = (() => {
       });
       foot.appendChild(btn);
     });
-    function onKey(e) { if (e.key === 'Escape') ctx.close(); }
+    // Only the top dialog reacts. Tab and Shift+Tab stay inside it; Escape closes it.
+    function onKey(e) {
+      if (root.lastElementChild !== backdrop) return;
+      if (e.key === 'Escape') { ctx.close(); return; }
+      if (e.key !== 'Tab') return;
+      const items = Array.prototype.filter.call(
+        backdrop.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+        (el) => !el.disabled && el.offsetParent !== null);
+      if (!items.length) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      if (!backdrop.contains(document.activeElement)) { e.preventDefault(); firstItem.focus(); }
+      else if (e.shiftKey && document.activeElement === firstItem) { e.preventDefault(); lastItem.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastItem) { e.preventDefault(); firstItem.focus(); }
+    }
     document.addEventListener('keydown', onKey);
+    // Close on a click outside the dialog, but not when the press was on the scrollbar or started inside it.
+    let pressedOutside = false;
+    backdrop.addEventListener('mousedown', (e) => {
+      pressedOutside = e.target === backdrop && e.clientX < backdrop.clientWidth && e.clientY < backdrop.clientHeight;
+    });
+    backdrop.addEventListener('click', (e) => {
+      if (pressedOutside && e.target === backdrop) ctx.close();
+      pressedOutside = false;
+    });
     backdrop.querySelector('[data-close]').addEventListener('click', () => ctx.close());
     root.appendChild(backdrop);
     const first = body.querySelector('input, select, textarea, button') || foot.querySelector('button');
@@ -129,58 +273,109 @@ const App = (() => {
     });
   }
 
+  /* ------------------------------------------------- Pages and events */
   function registerPage(id, module) {
     state.pages[id] = module;
   }
 
+  function on(event, fn) {
+    (state.listeners[event] = state.listeners[event] || []).push(fn);
+  }
+
+  function emit(event, value) {
+    (state.listeners[event] || []).forEach((fn) => fn(value));
+  }
+
+  function setNav(open) {
+    const wasOpen = document.body.classList.contains('nav-open');
+    document.body.classList.toggle('nav-open', open);
+    document.getElementById('menu-btn').setAttribute('aria-expanded', String(open));
+    if (open && !wasOpen) {
+      const current = document.querySelector('.nav-item[aria-current="page"]') || document.querySelector('.nav-item');
+      if (current) setTimeout(() => current.focus(), 30);
+    }
+    return wasOpen;
+  }
+
   function navigate(id) {
     if (!document.getElementById('page-' + id)) id = DEFAULT_PAGE;
+    const changed = state.current !== id;
     state.current = id;
     document.querySelectorAll('.page').forEach((p) => { p.hidden = p.id !== 'page-' + id; });
+    let crumb = '';
     document.querySelectorAll('.nav-item').forEach((n) => {
-      if (n.dataset.page === id) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current');
+      if (n.dataset.page === id) { n.setAttribute('aria-current', 'page'); crumb = n.dataset.crumb; } else n.removeAttribute('aria-current');
     });
+    document.getElementById('crumb-current').textContent = crumb;
+    if (changed) animateIn(document.getElementById('page-' + id));
+    if (setNav(false)) document.getElementById('content').focus({ preventScroll: true });
     const module = state.pages[id];
     if (module && module.show) module.show();
-    window.scrollTo(0, 0);
+    if (changed) window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
   }
 
   function showBanner(html, kind) {
     const banner = document.getElementById('app-banner');
     banner.className = 'banner ' + (kind || 'warn');
-    banner.innerHTML = html;
+    banner.innerHTML = icon(kind === 'error' ? 'xCircle' : 'alert', 18) + '<div>' + html + '</div>';
     banner.hidden = false;
   }
 
   async function boot() {
+    hydrateIcons(document);
+    document.addEventListener('pointerdown', addRipple);
     document.addEventListener('click', (e) => {
       const nav = e.target.closest('[data-page]');
       if (nav) navigate(nav.dataset.page);
       const go = e.target.closest('[data-goto]');
-      if (go) navigate(go.dataset.goto);
+      if (go) {
+        navigate(go.dataset.goto);
+        if (go.dataset.emit) emit(go.dataset.emit, go.dataset.arg || '');
+      }
     });
+    document.getElementById('menu-btn').addEventListener('click', () => setNav(!document.body.classList.contains('nav-open')));
+    document.getElementById('scrim').addEventListener('click', () => setNav(false));
+    document.getElementById('side-close').addEventListener('click', () => {
+      setNav(false);
+      document.getElementById('menu-btn').focus();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !document.body.classList.contains('nav-open') || document.querySelector('#modal-root .modal-backdrop')) return;
+      setNav(false);
+      document.getElementById('menu-btn').focus();
+    });
+    document.getElementById('global-search').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const q = document.getElementById('global-search-input').value.trim();
+      navigate('suppliers');
+      emit('suppliers:search', q);
+    });
+    // Show the first page straight away; the user's details fill in when the server answers.
+    if (!state.current) navigate(DEFAULT_PAGE);
     try {
       const info = await api('SEG_getAppInfo');
       state.info = info;
-      document.getElementById('user-email').textContent = 'Signed in as ' + info.user;
+      document.getElementById('user-email').textContent = info.user;
+      document.getElementById('user-avatar').textContent = initials(String(info.user).split('@')[0].replace(/[._]/g, ' '));
       const link = document.getElementById('sheet-link');
       link.href = info.spreadsheetUrl;
       link.hidden = false;
-      document.getElementById('today-label').textContent = 'Today: ' + fmtDate(info.today) + ' (Malaysia time)';
+      document.getElementById('today-label').lastElementChild.textContent = fmtDate(info.today) + ' · MYT';
       if (info.setupNeeded) {
-        showBanner('<strong>The database isn’t set up yet.</strong>&nbsp;Open the Apps Script editor, run <code>SEG_setupDatabase</code> once, then reload this page. Missing tabs: ' +
+        showBanner('<strong>The database isn’t set up yet.</strong> Open the Apps Script editor, run <code>SEG_setupDatabase</code> once, then reload. Missing tabs: ' +
           esc(info.missingTabs.join(', ')) + '.', 'warn');
       }
     } catch (err) {
-      showBanner('<strong>Could not reach the server.</strong>&nbsp;' + esc(err.message), 'error');
+      showBanner('<strong>Couldn’t reach the server.</strong> ' + esc(err.message), 'error');
     }
-    navigate(DEFAULT_PAGE);
   }
 
   return {
-    api: api, esc: esc, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtBytes: fmtBytes,
-    toast: toast, modal: modal, confirm: confirm, registerPage: registerPage, navigate: navigate, boot: boot,
-    get info() { return state.info; }
+    api: api, esc: esc, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtBytes: fmtBytes, initials: initials,
+    icon: icon, hydrateIcons: hydrateIcons, animateIn: animateIn, countUp: countUp, isWaitingForAi: isWaitingForAi,
+    toast: toast, modal: modal, confirm: confirm, registerPage: registerPage, navigate: navigate, on: on, emit: emit, boot: boot,
+    get info() { return state.info; },
+    get reduceMotion() { return reduceMotion; }
   };
 })();
 

@@ -10,10 +10,11 @@
  * because other modules read them by name.
  */
 const SEG = {
-  APP_NAME: 'Silent Expiry Guardian',
+  APP_NAME: 'AlphaTrack',
+  TAGLINE: 'Stay ahead of every supplier expiry',
   COMPANY: 'Alpha Electronics Sdn. Bhd.',
   TIMEZONE: 'Asia/Kuala_Lumpur',
-  ROOT_FOLDER_NAME: 'Silent Expiry Guardian - Supplier Documents',
+  ROOT_FOLDER_NAME: 'AlphaTrack - Supplier Documents',
 
   TABS: {
     SUPPLIERS: 'Suppliers',                  // Member 1
@@ -34,7 +35,8 @@ const SEG = {
   HEADERS: {
     Suppliers: ['supplier_id', 'supplier_name', 'registration_no', 'category_id', 'goods_services', 'contact_person',
       'contact_email', 'internal_officer', 'criticality', 'procurement_ref', 'procurement_status', 'registration_status',
-      'drive_folder_id', 'submitted_at', 'created_at', 'updated_at', 'created_by'],
+      'drive_folder_id', 'submitted_at', 'created_at', 'updated_at', 'created_by',
+      'account_status', 'deactivated_at', 'deactivated_by', 'deactivation_reason'],
     SupplierCategories: ['category_id', 'category_name', 'description', 'active'],
     DocumentTypes: ['doc_type_id', 'doc_type_name', 'document_class', 'has_expiry', 'default_reminder_days', 'description', 'active'],
     CategoryRequirements: ['category_id', 'doc_type_id', 'mandatory', 'reminder_days', 'notes'],
@@ -65,6 +67,11 @@ const SEG = {
     PENDING_VERIFICATION: 'PENDING_VERIFICATION',
     ACTIVE_MONITORING: 'ACTIVE_MONITORING'
   },
+
+  // Whether AlphaTrack still looks after a supplier (Member 1). Blank means ACTIVE.
+  // A DEACTIVATED supplier keeps every record and document but is no longer monitored,
+  // extracted or reminded: Members 2-4 skip it (use M1_isMonitored / M1_getMonitoredSuppliers).
+  ACCOUNT_STATUS: { ACTIVE: 'ACTIVE', DEACTIVATED: 'DEACTIVATED' },
 
   // A document version is ACTIVE until a newer version for the same requirement replaces it.
   LIFECYCLE: { ACTIVE: 'ACTIVE', SUPERSEDED: 'SUPERSEDED' },

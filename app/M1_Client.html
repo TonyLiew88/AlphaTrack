@@ -6,16 +6,19 @@
  */
 (() => {
   const E = App.esc;
+  const I = App.icon;
   const byId = (id) => document.getElementById(id);
 
   const STATUS = {
-    DRAFT: { label: 'Draft', cls: 'st-draft', callout: 'neutral' },
-    PENDING_DOCUMENTS: { label: 'Pending documents', cls: 'st-pending-docs', callout: 'warn' },
-    PENDING_VERIFICATION: { label: 'Pending verification', cls: 'st-pending-ver', callout: 'info' },
-    ACTIVE_MONITORING: { label: 'Active monitoring', cls: 'st-active', callout: 'ok' }
+    DRAFT: { label: 'Draft', cls: 'st-draft', callout: 'neutral', icon: 'edit', tone: 'tone-neutral', foot: 'Registration not submitted' },
+    PENDING_DOCUMENTS: { label: 'Pending documents', cls: 'st-pending-docs', callout: 'warn', icon: 'alert', tone: 'tone-warn', foot: 'A mandatory document is missing' },
+    PENDING_VERIFICATION: { label: 'Pending verification', cls: 'st-pending-ver', callout: 'info', icon: 'sparkles', tone: 'tone-info', foot: 'Waiting for AI extraction' },
+    ACTIVE_MONITORING: { label: 'Active monitoring', cls: 'st-active', callout: 'ok', icon: 'shield', tone: 'tone-ok', foot: 'All documents read by AI' }
   };
   const STATUS_ORDER = ['DRAFT', 'PENDING_DOCUMENTS', 'PENDING_VERIFICATION', 'ACTIVE_MONITORING'];
   const CLASS_LABEL = { CONTRACT: 'Contract', LICENCE: 'Licence', CERTIFICATE: 'Certificate' };
+  const CLASS_ICON = { CONTRACT: 'contract', LICENCE: 'licence', CERTIFICATE: 'certificate' };
+  const CATEGORY_ICON = { CLEANING: 'droplet', SECURITY: 'shield', ELECTRICAL: 'bolt', ELECTRONIC_COMPONENTS: 'chip', LOGISTICS: 'truck' };
   const STEPS = ['Supplier information', 'Category', 'Document checklist', 'Upload documents', 'Review & submit'];
   const EMPTY_INFO = {
     supplierName: '', registrationNo: '', categoryId: '', goodsServices: '', contactPerson: '',
@@ -31,28 +34,51 @@
     { key: 'goodsServices', label: 'Goods or services provided', textarea: true, full: true }
   ];
   const CRIT_HELP = { LOW: 'Easy to replace', MEDIUM: 'Some impact if disrupted', HIGH: 'Critical to operations' };
-  const ACTION_LABEL = {
-    SUPPLIER_DRAFT_CREATED: 'Draft created', SUPPLIER_DRAFT_SAVED: 'Draft saved', SUPPLIER_REGISTERED: 'Registration submitted',
-    SUPPLIER_UPDATED: 'Details updated', REQUIREMENTS_UPDATED: 'Document checklist updated', DOCUMENT_UPLOADED: 'Document uploaded',
-    DOCUMENT_REPLACED: 'Renewed document uploaded', UPLOAD_REJECTED: 'Upload refused', REGISTRATION_STATUS_CHANGED: 'Registration status changed'
-  };
   const MIME_BY_EXT = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
   const ACCEPT = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg';
 
   const st = {
-    loaded: false, loading: null, bound: false, master: null, suppliers: [],
-    filter: { q: '', status: '', category: '' }, wizard: null, detail: null, uploading: {}, openHistory: {}
+    ready: null, bound: false, master: null, suppliers: [],
+    filter: { q: '', status: '', category: '' }, wizard: null, detail: null, uploading: {}, openHistory: {}, view: 'list',
+    pick: null, refreshSeq: 0
   };
 
   App.registerPage('suppliers', {
     show() {
       bindEvents();
-      if (!st.loaded && !st.loading) st.loading = init();
+      const firstVisit = !st.ready;
+      ensureReady();
+      if (!firstVisit && st.view === 'list' && st.master) reloadList();
     }
+  });
+  App.on('suppliers:new', async () => { await ensureReady(); if (await canLeaveWizard()) openWizard(null); });
+  App.on('suppliers:open', async (id) => { await ensureReady(); if (await canLeaveWizard()) openDetail(id); });
+  App.on('suppliers:status', async (status) => {
+    await ensureReady();
+    if (!(await canLeaveWizard())) return;
+    backToList();
+    await reloadList();
+    setFilter({ status: status });
+  });
+  App.on('suppliers:search', async (q) => {
+    await ensureReady();
+    if (!(await canLeaveWizard())) return;
+    backToList();
+    await reloadList();
+    setFilter({ q: q });
   });
 
   /* ---------------------------------------------------------------- Helpers */
 
+  function ensureReady() {
+    if (!st.ready) {
+      st.ready = init().catch((err) => {
+        st.ready = null;
+        throw err;
+      });
+    }
+    return st.ready.catch(() => {});
+  }
   function typeOf(id) {
     return st.master.docTypes.find((t) => t.docTypeId === id) || { docTypeId: id, name: id, documentClass: '', hasExpiry: true, defaultReminderDays: 30 };
   }
@@ -79,39 +105,47 @@
     Object.keys(EMPTY_INFO).forEach((k) => { out[k] = src[k] || ''; });
     return out;
   }
-  function reqName(r) {
-    return typeOf(r.docTypeId).name + (r.label ? ' (' + r.label + ')' : '');
-  }
-  function title(word) {
-    return word ? word.charAt(0) + word.slice(1).toLowerCase() : '';
-  }
-  function chip(cls, text, dot) {
-    return '<span class="chip ' + cls + (dot ? ' chip-dot' : '') + '">' + E(text) + '</span>';
-  }
+  function reqName(r) { return typeOf(r.docTypeId).name + (r.label ? ' (' + r.label + ')' : ''); }
+  function title(word) { return word ? word.charAt(0) + word.slice(1).toLowerCase() : ''; }
+  /** Only letters, digits, - and _ : for values from the Sheet that go into class names and ids. */
+  function tok(v) { return String(v === undefined || v === null ? '' : v).replace(/[^A-Za-z0-9_-]/g, ''); }
+  /** Links to files must be Google Drive (https) or, in the local preview, blob: URLs. */
+  function safeUrl(u) { return /^(https:\/\/|blob:)/i.test(String(u || '')) ? String(u) : '#'; }
+  function chip(cls, text, dot) { return '<span class="chip ' + cls + (dot ? ' chip-dot' : '') + '">' + E(text) + '</span>'; }
   function statusChip(s) {
     const x = STATUS[s] || { label: s || 'Unknown', cls: 'chip-neutral' };
     return chip(x.cls, x.label, true);
   }
-  function critChip(c) {
-    return c ? chip('crit-' + c, title(c) + ' criticality') : '';
+  function deactivatedChip() { return '<span class="chip chip-off chip-dot">Deactivated</span>'; }
+  function critChip(c) { return c ? chip('crit-' + tok(c), title(c) + ' criticality', true) : ''; }
+  function classChip(c) { return c ? '<span class="chip cls-' + tok(c) + '">' + I(CLASS_ICON[c] || 'file', 13) + E(CLASS_LABEL[c] || c) + '</span>' : ''; }
+  function needChip(mandatory) { return mandatory ? chip('chip-mandatory', 'Mandatory') : chip('chip-optional', 'Optional'); }
+  function classTile(c, size) {
+    return '<span class="tile-icon tone-' + (tok(c) || 'neutral') + '"' + (size ? ' style="width:' + size + 'px;height:' + size + 'px"' : '') + '>' + I(CLASS_ICON[c] || 'file', 18) + '</span>';
   }
-  function classChip(c) {
-    return c ? chip('cls-' + c, CLASS_LABEL[c] || c) : '';
-  }
-  function needChip(mandatory) {
-    return mandatory ? chip('chip-mandatory', 'Mandatory') : chip('chip-optional', 'Optional');
+  function categoryTile(id) {
+    return '<span class="tile-icon tone-brand">' + I(CATEGORY_ICON[id] || 'building', 16) + '</span>';
   }
   function extractionChip(s) {
     const map = {
-      QUEUED: ['Queued for AI extraction', 'ex-queued'], PROCESSING: ['AI extraction running', 'ex-queued'],
-      EXTRACTED: ['Read by AI', 'ex-ok'], CORRECTED: ['Read by AI, corrected', 'ex-ok'], NOT_REQUESTED: ['Not sent to AI', 'ex-none']
+      QUEUED: ['Queued for AI extraction', 'ex-queued', true], PROCESSING: ['AI extraction running', 'ex-queued', true],
+      PAUSED: ['AI paused: supplier deactivated', 'ex-none', false],
+      EXTRACTED: ['Read by AI', 'ex-ok', false], CORRECTED: ['Read by AI, corrected', 'ex-ok', false], NOT_REQUESTED: ['Not sent to AI', 'ex-none', false]
     };
-    const m = map[s] || [String(s || 'Unknown').replace(/_/g, ' ').toLowerCase(), 'ex-bad'];
-    return chip(m[1], m[0]);
+    const m = map[s] || [String(s || 'Unknown').replace(/_/g, ' ').toLowerCase(), 'ex-bad', false];
+    return '<span class="chip ' + m[1] + ' chip-dot' + (m[2] ? ' chip-live' : '') + '">' + E(m[0]) + '</span>';
   }
-  function showView(name) {
+  function showView(name, motion) {
+    const changed = st.view !== name;
+    st.view = name;
     ['list', 'wizard', 'detail'].forEach((v) => { byId('m1-' + v + '-view').hidden = v !== name; });
-    window.scrollTo(0, 0);
+    if (changed || motion) App.animateIn(byId('m1-' + name + '-view'), motion || 'enter');
+    if (changed) window.scrollTo({ top: 0, behavior: App.reduceMotion ? 'auto' : 'smooth' });
+  }
+  function backToList() {
+    st.wizard = null;
+    st.detail = null;
+    showView('list');
   }
   async function busy(button, label, fn) {
     const old = button ? button.innerHTML : '';
@@ -129,27 +163,25 @@
     }
   }
   function loadingBlock(text) {
-    return '<div class="card card-pad" aria-busy="true"><p class="muted">' + E(text) + '</p><div class="section-gap" style="margin-top:12px">' +
-      '<div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:85%"></div><div class="skeleton" style="width:40%"></div></div></div>';
+    return '<div class="card card-pad" aria-busy="true"><p class="muted">' + E(text) + '</p><div class="section-gap" style="margin-top:14px;gap:12px">' +
+      '<div class="skeleton" style="width:55%;height:22px"></div><div class="skeleton" style="width:85%"></div><div class="skeleton" style="width:40%"></div></div></div>';
   }
 
   /* -------------------------------------------------------------- Loading */
 
   async function init() {
-    byId('m1-table').innerHTML = '<div class="card-pad" aria-busy="true"><div class="section-gap"><div class="skeleton"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:65%"></div></div></div>';
+    byId('m1-table').innerHTML = '<div class="card-pad" aria-busy="true"><div class="section-gap" style="gap:14px"><div class="skeleton"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:65%"></div></div></div>';
     try {
       const results = await Promise.all([App.api('M1_getBootstrap'), App.api('M1_listSuppliers')]);
       st.master = results[0];
       st.suppliers = results[1];
-      st.loaded = true;
       fillFilterOptions();
       renderList();
       if (st.master.masterDataMissing) App.toast('Categories and document types are missing. Run SEG_setupDatabase() once in the Apps Script editor.', 'error');
     } catch (err) {
-      byId('m1-table').innerHTML = '<div class="empty"><h3>Couldn’t load suppliers</h3><p>' + E(err.message) + '</p>' +
+      byId('m1-table').innerHTML = '<div class="empty"><span class="empty-art tone-danger">' + I('xCircle', 28) + '</span><h3>Couldn’t load suppliers</h3><p>' + E(err.message) + '</p>' +
         '<button type="button" class="btn btn-secondary" data-m1-retry>Try again</button></div>';
-    } finally {
-      st.loading = null;
+      throw err;
     }
   }
 
@@ -168,7 +200,16 @@
     byId('m1-filter-category').innerHTML = '<option value="">All categories</option>' +
       st.master.categories.map((c) => '<option value="' + E(c.categoryId) + '">' + E(c.name) + '</option>').join('');
     byId('m1-filter-status').innerHTML = '<option value="">All statuses</option>' +
-      STATUS_ORDER.map((s) => '<option value="' + s + '">' + E(STATUS[s].label) + '</option>').join('');
+      STATUS_ORDER.map((s) => '<option value="' + s + '">' + E(STATUS[s].label) + '</option>').join('') +
+      '<option value="DEACTIVATED">Deactivated</option>';
+  }
+
+  function setFilter(changes) {
+    Object.assign(st.filter, changes);
+    byId('m1-search').value = st.filter.q;
+    byId('m1-filter-category').value = st.filter.category;
+    byId('m1-filter-status').value = st.filter.status;
+    renderList();
   }
 
   function renderList() {
@@ -177,51 +218,68 @@
   }
 
   function renderStatusCards() {
-    byId('m1-status-cards').innerHTML = STATUS_ORDER.map((s) => {
-      const n = st.suppliers.filter((x) => x.registrationStatus === s).length;
-      return '<button type="button" class="status-card" data-status="' + s + '" aria-pressed="' + (st.filter.status === s) + '">' +
-        '<span class="num">' + n + '</span><span class="lbl">' + statusChip(s) + '</span></button>';
+    const box = byId('m1-status-cards');
+    box.innerHTML = STATUS_ORDER.map((s, i) => {
+      const n = st.suppliers.filter((x) => !x.deactivated && x.registrationStatus === s).length;
+      const meta = STATUS[s];
+      return '<button type="button" class="tile" data-status="' + s + '" aria-pressed="' + (st.filter.status === s) + '" style="--i:' + i + '">' +
+        '<span class="tile-top"><span class="tile-label">' + E(meta.label) + '</span><span class="tile-icon ' + meta.tone + '">' + I(meta.icon, 18) + '</span></span>' +
+        '<span class="tile-value" data-count="' + n + '">' + n + '</span><span class="tile-foot">' + E(meta.foot) + '</span></button>';
     }).join('');
+    if (!box.dataset.animated) {
+      box.dataset.animated = '1';
+      box.classList.add('stagger');
+      App.countUp(box);
+    }
   }
 
-  function renderTable() {
+  function renderTable(animate) {
+    byId('m1-table').classList.toggle('no-anim', animate === false);
     const f = st.filter;
     const q = f.q.trim().toLowerCase();
     const rows = st.suppliers.filter((s) =>
-      (!f.status || s.registrationStatus === f.status) &&
+      (!f.status || (f.status === 'DEACTIVATED' ? s.deactivated : (!s.deactivated && s.registrationStatus === f.status))) &&
       (!f.category || s.categoryId === f.category) &&
-      (!q || [s.supplierName, s.supplierId, s.registrationNo, s.internalOfficer].some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)));
+      (!q || [s.supplierName, s.supplierId, s.registrationNo, s.internalOfficer].some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)))
+      .sort((a, b) => (a.deactivated ? 1 : 0) - (b.deactivated ? 1 : 0));
     byId('m1-count').textContent = rows.length + ' of ' + st.suppliers.length + ' suppliers';
 
     if (!st.suppliers.length) {
-      byId('m1-table').innerHTML = '<div class="empty"><h3>No suppliers registered yet</h3>' +
+      byId('m1-table').innerHTML = '<div class="empty enter"><span class="empty-art tone-brand">' + I('building', 28) + '</span><h3>No suppliers registered yet</h3>' +
         '<p>Start with a supplier Procurement has already approved.</p>' +
-        '<button type="button" class="btn btn-primary" data-m1-add>Add existing supplier</button></div>';
+        '<button type="button" class="btn btn-primary" data-m1-add>' + I('plus', 16) + 'Add existing supplier</button></div>';
       return;
     }
     if (!rows.length) {
-      byId('m1-table').innerHTML = '<div class="empty"><h3>No suppliers match these filters</h3>' +
+      byId('m1-table').innerHTML = '<div class="empty enter"><span class="empty-art tone-neutral">' + I('search', 28) + '</span><h3>No suppliers match these filters</h3>' +
         '<button type="button" class="btn btn-secondary" data-m1-clear>Clear filters</button></div>';
       return;
     }
     byId('m1-table').innerHTML = '<table class="data"><caption class="visually-hidden">Registered suppliers</caption><thead><tr>' +
       '<th scope="col">Supplier</th><th scope="col">Category</th><th scope="col">Criticality</th>' +
-      '<th scope="col">Mandatory documents</th><th scope="col">Registration status</th><th scope="col">Last updated</th></tr></thead><tbody>' +
-      rows.map((s) => {
+      '<th scope="col">Mandatory documents</th><th scope="col">Status</th><th scope="col" class="col-updated">Last updated</th></tr></thead><tbody class="stagger">' +
+      rows.map((s, i) => {
         const pct = s.mandatoryTotal ? Math.round((s.mandatoryUploaded / s.mandatoryTotal) * 100) : 0;
         const progress = s.mandatoryTotal
-          ? '<div class="progress"><div class="progress-bar" aria-hidden="true"><div class="progress-fill' + (pct === 100 ? ' full' : '') + '" style="width:' + pct + '%"></div></div>' +
+          ? '<div class="progress"><div class="progress-bar" aria-hidden="true"><div class="progress-fill' + (pct === 100 ? ' full' : '') + '" style="width:' + pct + '%;animation-delay:' + (150 + Math.min(i, 12) * 40) + 'ms"></div></div>' +
             '<span class="progress-text">' + s.mandatoryUploaded + ' of ' + s.mandatoryTotal + '</span></div>'
           : '<span class="cell-sub">No checklist yet</span>';
-        return '<tr class="clickable" data-supplier="' + E(s.supplierId) + '">' +
-          '<td><button type="button" class="link-btn cell-main" data-supplier="' + E(s.supplierId) + '">' + E(s.supplierName) + '</button>' +
-          '<div class="cell-sub">' + E(s.supplierId) + (s.registrationNo ? ' · ' + E(s.registrationNo) : '') + '</div></td>' +
-          '<td>' + E(s.categoryName) + '</td>' +
-          '<td>' + (s.criticality ? chip('crit-' + s.criticality, title(s.criticality)) : '<span class="cell-sub">Not set</span>') + '</td>' +
+        return '<tr class="clickable' + (s.deactivated ? ' is-deactivated' : '') + '" data-supplier="' + E(s.supplierId) + '" style="--i:' + Math.min(i, 12) + '">' +
+          '<td><div class="who"><span class="avatar">' + E(App.initials(s.supplierName)) + '</span><div>' +
+          '<button type="button" class="link-btn" data-supplier="' + E(s.supplierId) + '">' + E(s.supplierName) + '</button>' +
+          '<div class="cell-sub">' + E(s.supplierId) + (s.registrationNo ? ' · ' + E(s.registrationNo) : '') + '</div></div></div></td>' +
+          '<td><span class="cat">' + categoryTile(s.categoryId) + E(s.categoryName) + '</span></td>' +
+          '<td>' + (s.criticality ? chip('crit-' + tok(s.criticality), title(s.criticality), true) : '<span class="cell-sub">Not set</span>') + '</td>' +
           '<td>' + progress + '</td>' +
-          '<td>' + statusChip(s.registrationStatus) + '</td>' +
-          '<td class="cell-sub">' + E(App.fmtDateTime(s.updatedAt)) + '</td></tr>';
+          '<td><div class="cell-split">' + (s.deactivated ? deactivatedChip() : statusChip(s.registrationStatus)) +
+            '<span class="row-go">' + I('chevronRight', 16) + '</span></div></td>' +
+          '<td class="col-updated" style="white-space:nowrap">' + updatedCell(s.updatedAt) + '</td></tr>';
       }).join('') + '</tbody></table>';
+  }
+
+  function updatedCell(iso) {
+    const time = String(iso || '').match(/T(\d{2}:\d{2})/);
+    return '<span class="cell-main" style="font-weight:500">' + E(App.fmtDate(iso)) + '</span>' + (time ? '<div class="cell-sub">' + time[1] + '</div>' : '');
   }
 
   /* --------------------------------------------------------------- Events */
@@ -231,27 +289,21 @@
     st.bound = true;
 
     byId('m1-add').addEventListener('click', () => openWizard(null));
-    byId('m1-search').addEventListener('input', (e) => { st.filter.q = e.target.value; renderTable(); });
+    byId('m1-search').addEventListener('input', (e) => { st.filter.q = e.target.value; renderTable(false); });
     byId('m1-filter-category').addEventListener('change', (e) => { st.filter.category = e.target.value; renderTable(); });
     byId('m1-filter-status').addEventListener('change', (e) => { st.filter.status = e.target.value; renderList(); });
     byId('m1-status-cards').addEventListener('click', (e) => {
       const card = e.target.closest('[data-status]');
       if (!card) return;
-      st.filter.status = st.filter.status === card.dataset.status ? '' : card.dataset.status;
-      byId('m1-filter-status').value = st.filter.status;
-      renderList();
+      const picked = card.dataset.status;
+      setFilter({ status: st.filter.status === picked ? '' : picked });
+      const again = byId('m1-status-cards').querySelector('[data-status="' + tok(picked) + '"]');
+      if (again) again.focus();
     });
     byId('m1-table').addEventListener('click', (e) => {
-      if (e.target.closest('[data-m1-retry]')) { if (!st.loading) st.loading = init(); return; }
+      if (e.target.closest('[data-m1-retry]')) { ensureReady(); return; }
       if (e.target.closest('[data-m1-add]')) { openWizard(null); return; }
-      if (e.target.closest('[data-m1-clear]')) {
-        st.filter = { q: '', status: '', category: '' };
-        byId('m1-search').value = '';
-        byId('m1-filter-category').value = '';
-        byId('m1-filter-status').value = '';
-        renderList();
-        return;
-      }
+      if (e.target.closest('[data-m1-clear]')) { setFilter({ q: '', status: '', category: '' }); return; }
       const row = e.target.closest('[data-supplier]');
       if (row) openDetail(row.dataset.supplier);
     });
@@ -259,9 +311,11 @@
     const wv = byId('m1-wizard-view');
     wv.addEventListener('click', (e) => {
       if (!st.wizard) return;
+      const pick = e.target.closest('[data-pick-req]');
+      if (pick) { openPicker(st.wizard.supplierId, pick.dataset.pickReq); return; }
       const action = e.target.closest('[data-w]');
       if (action) { wizardAction(action.dataset.w, action); return; }
-      handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w');
+      if (handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w')) st.wizard.dirty = true;
     });
     wv.addEventListener('input', (e) => {
       if (!st.wizard) return;
@@ -272,24 +326,34 @@
       if (!st.wizard) return;
       const t = e.target;
       if (t.name === 'w-category') { st.wizard.pendingCategory = t.value; st.wizard.dirty = true; return; }
-      if (t.dataset.req) { st.wizard.dirty = true; handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w'); return; }
-      if (t.dataset.uploadReq && t.files && t.files[0]) {
-        uploadFile(t.files[0], st.wizard.supplierId, t.dataset.uploadReq);
-        t.value = '';
-      }
+      if (t.dataset.req) { st.wizard.dirty = true; handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w'); }
+    });
+
+    const picker = byId('m1-file-input');
+    picker.addEventListener('change', () => {
+      const file = picker.files && picker.files[0];
+      const target = st.pick;
+      st.pick = null;
+      if (file && target) uploadFile(file, target.supplierId, target.requirementId);
+      picker.value = '';
     });
     bindDrop(wv, () => (st.wizard ? st.wizard.supplierId : ''));
 
     const dv = byId('m1-detail-view');
     dv.addEventListener('click', (e) => {
+      const pick = e.target.closest('[data-pick-req]');
+      if (pick && st.detail) { openPicker(st.detail.supplier.supplierId, pick.dataset.pickReq); return; }
       const a = e.target.closest('[data-d]');
-      if (!a || !st.detail) return;
+      if (!a) return;
       const act = a.dataset.d;
-      if (act === 'back') { st.detail = null; showView('list'); reloadList(); }
+      if (act === 'back') { backToList(); reloadList(); return; }
+      if (!st.detail) return;
       if (act === 'continue') openWizard(st.detail);
       if (act === 'edit-info') editInfoModal();
       if (act === 'edit-reqs') editRequirementsModal();
-      if (act === 'refresh') refreshDetail();
+      if (act === 'refresh') busy(a, 'Refreshing…', refreshDetail);
+      if (act === 'deactivate') deactivateModal();
+      if (act === 'reactivate') reactivate(a);
       if (act === 'history') {
         st.openHistory[a.dataset.req] = !st.openHistory[a.dataset.req];
         renderDetail();
@@ -297,14 +361,15 @@
         if (again) again.focus();
       }
     });
-    dv.addEventListener('change', (e) => {
-      const t = e.target;
-      if (st.detail && t.dataset.uploadReq && t.files && t.files[0]) {
-        uploadFile(t.files[0], st.detail.supplier.supplierId, t.dataset.uploadReq);
-        t.value = '';
-      }
-    });
     bindDrop(dv, () => (st.detail ? st.detail.supplier.supplierId : ''));
+  }
+
+  function openPicker(supplierId, requirementId) {
+    if (!supplierId || !requirementId) return;
+    const picker = byId('m1-file-input');
+    st.pick = { supplierId: supplierId, requirementId: requirementId };
+    picker.value = '';
+    picker.click();
   }
 
   function bindDrop(root, getSupplierId) {
@@ -336,7 +401,7 @@
     let hint = '';
     if (f.hint) { hint = '<span class="hint" id="' + id + '-hint">' + E(f.hint) + '</span>'; described.push(id + '-hint'); }
     let err = '';
-    if (error) { err = '<span class="error-text" id="' + id + '-err">' + E(error) + '</span>'; described.push(id + '-err'); }
+    if (error) { err = '<span class="error-text" id="' + id + '-err">' + I('alert', 14) + E(error) + '</span>'; described.push(id + '-err'); }
     const attrs = 'id="' + id + '" data-info="' + f.key + '"' +
       (described.length ? ' aria-describedby="' + described.join(' ') + '"' : '') +
       (error ? ' aria-invalid="true"' : '') + (f.required ? ' aria-required="true"' : '');
@@ -350,11 +415,11 @@
 
   function criticalityHtml(value, error, prefix) {
     return '<fieldset class="field full" style="border:0;padding:0;margin:0">' +
-      '<legend class="field-label" style="margin-bottom:6px">Supplier criticality <span class="req-mark" aria-hidden="true">*</span></legend>' +
+      '<legend class="field-label" style="margin-bottom:8px">Supplier criticality <span class="req-mark" aria-hidden="true">*</span></legend>' +
       '<div class="seg">' + st.master.criticality.map((c) =>
-        '<label><input type="radio" name="' + prefix + '-criticality" value="' + c + '" data-info="criticality"' + (value === c ? ' checked' : '') + '>' +
-        E(title(c)) + ' <span class="muted small" style="font-weight:500">' + E(CRIT_HELP[c] || '') + '</span></label>').join('') + '</div>' +
-      (error ? '<span class="error-text">' + E(error) + '</span>' : '') + '</fieldset>';
+        '<label><span class="seg-top"><input type="radio" name="' + prefix + '-criticality" value="' + c + '" data-info="criticality"' + (value === c ? ' checked' : '') + '>' +
+        E(title(c)) + '</span><span class="seg-sub">' + E(CRIT_HELP[c] || '') + '</span></label>').join('') + '</div>' +
+      (error ? '<span class="error-text">' + I('alert', 14) + E(error) + '</span>' : '') + '</fieldset>';
   }
 
   function categorySelectHtml(value, error, prefix) {
@@ -363,8 +428,8 @@
       '<select class="select' + (error ? ' invalid' : '') + '" id="' + id + '" data-info="categoryId" aria-describedby="' + id + '-hint">' +
       '<option value="">Choose a category</option>' +
       st.master.categories.map((c) => '<option value="' + E(c.categoryId) + '"' + (c.categoryId === value ? ' selected' : '') + '>' + E(c.name) + '</option>').join('') +
-      '</select><span class="hint" id="' + id + '-hint">Changing the category doesn’t change the checklist. Use “Edit document checklist” to add its suggested documents.</span>' +
-      (error ? '<span class="error-text">' + E(error) + '</span>' : '') + '</div>';
+      '</select><span class="hint" id="' + id + '-hint">Changing the category doesn’t change the checklist. Use “Edit checklist” to add its suggested documents.</span>' +
+      (error ? '<span class="error-text">' + I('alert', 14) + E(error) + '</span>' : '') + '</div>';
   }
 
   function infoFormHtml(info, errors, prefix, withCategory) {
@@ -411,27 +476,28 @@
       const t = typeOf(r.docTypeId);
       const idp = prefix + '-req-' + i;
       return '<tr data-index="' + i + '">' +
-        '<td style="min-width:240px"><div class="cell-main">' + E(t.name) + '</div>' +
-          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 6px">' + classChip(t.documentClass) +
+        '<td style="min-width:260px"><div style="display:flex;gap:12px;align-items:flex-start">' + classTile(t.documentClass, 34) +
+          '<div style="flex:1 1 auto;min-width:0"><div class="cell-main">' + E(t.name) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:5px 0 7px">' + classChip(t.documentClass) +
           chip('chip-neutral', r.source === 'CATEGORY_DEFAULT' ? 'Category default' : 'Added') + '</div>' +
           '<label class="visually-hidden" for="' + idp + '-label">Label for ' + E(t.name) + '</label>' +
-          '<input class="input" id="' + idp + '-label" data-req="label" value="' + E(r.label) + '" maxlength="80" placeholder="Optional label, e.g. Public liability"></td>' +
+          '<input class="input" id="' + idp + '-label" data-req="label" value="' + E(r.label) + '" maxlength="80" placeholder="Label (optional)"></div></div></td>' +
         '<td><label class="switch"><input type="checkbox" data-req="mandatory"' + (r.mandatory ? ' checked' : '') + '>' + (r.mandatory ? 'Mandatory' : 'Optional') + '</label></td>' +
         '<td><label class="visually-hidden" for="' + idp + '-days">Reminder days for ' + E(t.name) + '</label>' +
           '<input class="input days" type="number" min="1" max="730" step="1" id="' + idp + '-days" data-req="reminderDays" value="' + E(r.reminderDays) + '">' +
-          '<div class="cell-sub">days before ' + (t.documentClass === 'CONTRACT' ? 'end date' : 'expiry') + '</div></td>' +
+          '<div class="cell-sub" style="margin-top:4px">days before ' + (t.documentClass === 'CONTRACT' ? 'end date' : 'expiry') + '</div></td>' +
         '<td>' + (t.hasExpiry
           ? '<span class="cell-sub">Has an expiry or end date</span>'
           : '<label class="visually-hidden" for="' + idp + '-review">Review date for ' + E(t.name) + '</label>' +
             '<input class="input date" type="date" id="' + idp + '-review" data-req="reviewDate" value="' + E(r.reviewDate) + '">' +
-            '<div class="cell-sub">No formal expiry: review on this date</div>') + '</td>' +
+            '<div class="cell-sub" style="margin-top:4px">No formal expiry: review on this date</div>') + '</td>' +
         '<td><button type="button" class="btn btn-danger btn-sm" data-req-remove' +
           (r.mandatory ? ' disabled title="Make it optional first"' : '') + ' aria-label="Remove ' + E(t.name) + '">Remove</button></td></tr>';
     }).join('');
     const options = ['CONTRACT', 'LICENCE', 'CERTIFICATE'].map((cls) =>
       '<optgroup label="' + CLASS_LABEL[cls] + 's">' + st.master.docTypes.filter((t) => t.documentClass === cls)
         .map((t) => '<option value="' + E(t.docTypeId) + '">' + E(t.name) + '</option>').join('') + '</optgroup>').join('');
-    return '<div class="table-wrap"><table class="data checklist" data-prefix="' + prefix + '"><caption class="visually-hidden">Document checklist</caption><thead><tr>' +
+    return '<div class="table-wrap card" style="box-shadow:none"><table class="data checklist" data-prefix="' + prefix + '"><caption class="visually-hidden">Document checklist</caption><thead><tr>' +
       '<th scope="col">Document</th><th scope="col">Required?</th><th scope="col">Reminder</th><th scope="col">Expiry or review</th>' +
       '<th scope="col"><span class="visually-hidden">Remove</span></th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="5" class="muted">No documents yet. Add at least one mandatory document below.</td></tr>') + '</tbody></table></div>' +
@@ -440,7 +506,7 @@
       '<div class="field"><label class="field-label" for="' + prefix + '-add-label">Label (optional)</label>' +
       '<input class="input" id="' + prefix + '-add-label" maxlength="80" placeholder="e.g. Workmen’s compensation"></div>' +
       '<label class="switch" style="min-height:42px"><input type="checkbox" id="' + prefix + '-add-mandatory" checked>Mandatory</label>' +
-      '<button type="button" class="btn btn-secondary" data-req-add>Add to checklist</button></div>';
+      '<button type="button" class="btn btn-secondary" data-req-add>' + I('plus', 16) + 'Add to checklist</button></div>';
   }
 
   /** Handles clicks and edits inside a checklist editor. list is changed in place. */
@@ -449,7 +515,12 @@
     if (e.type === 'click') {
       if (t.closest('[data-req-remove]')) {
         const i = Number(t.closest('tr').dataset.index);
-        if (list[i] && !list[i].mandatory) { list.splice(i, 1); rerender(); }
+        if (list[i] && !list[i].mandatory) {
+          list.splice(i, 1);
+          rerender();
+          const select = byId(prefix + '-add-type');
+          if (select) select.focus();
+        }
         return true;
       }
       if (t.closest('[data-req-add]')) {
@@ -462,7 +533,14 @@
         }
         list.push({ requirementId: '', docTypeId: typeId, label: label, mandatory: mandatory, reminderDays: typeOf(typeId).defaultReminderDays, reviewDate: '', source: 'ADDED' });
         rerender();
-        App.toast(typeOf(typeId).name + ' added to the checklist.');
+        const rowsNow = document.querySelectorAll('table[data-prefix="' + prefix + '"] tbody tr');
+        const newRow = rowsNow[rowsNow.length - 1];
+        if (newRow) {
+          App.animateIn(newRow);
+          const label = newRow.querySelector('[data-req="label"]');
+          if (label) label.focus();
+        }
+        App.toast(typeOf(typeId).name + ' added to the checklist.', 'ok');
         return true;
       }
       return false;
@@ -519,7 +597,7 @@
     try {
       const base64 = await readAsBase64(file);
       const res = await App.api('M1_uploadDocument', { supplierId: supplierId, requirementId: requirementId, fileName: file.name, mimeType: mime, base64: base64 });
-      delete st.uploading[requirementId];
+      st.uploading[requirementId] = { state: 'done' };
       App.toast(file.name + ' saved as ' + res.docId + ' (version ' + res.version + ')' +
         (res.replaced.length ? ', replacing ' + res.replaced.join(', ') : '') + '. Queued for AI extraction.', 'ok');
       await refreshAfterUpload(supplierId);
@@ -527,40 +605,47 @@
       st.uploading[requirementId] = { state: 'error', message: err.message };
     }
     rerenderCurrent();
+    if (st.uploading[requirementId] && st.uploading[requirementId].state === 'done') {
+      setTimeout(() => { if (st.uploading[requirementId] && st.uploading[requirementId].state === 'done') delete st.uploading[requirementId]; }, 1500);
+    }
   }
 
+  /** Re-reads the supplier after an upload. If two uploads finish close together, only the newest answer is kept. */
   async function refreshAfterUpload(supplierId) {
+    const mine = ++st.refreshSeq;
     try {
       const detail = await App.api('M1_getSupplierDetail', supplierId);
+      if (mine !== st.refreshSeq) return;
       if (st.wizard && st.wizard.supplierId === supplierId) st.wizard.detail = detail;
       if (st.detail && st.detail.supplier.supplierId === supplierId) st.detail = detail;
+      reloadList();
     } catch (err) {
       App.toast(err.message, 'error');
     }
   }
 
   function rerenderCurrent() {
-    if (!byId('m1-wizard-view').hidden && st.wizard) renderWizard();
-    else if (!byId('m1-detail-view').hidden && st.detail) renderDetail();
+    if (st.view === 'wizard' && st.wizard) renderWizard(null);
+    else if (st.view === 'detail' && st.detail) renderDetail();
   }
 
-  function uploadState(r) {
+  function uploadStatus(r) {
     const u = st.uploading[r.requirementId];
     const cur = r.current;
-    if (u && u.state === 'uploading') return '<span class="upload-file"><span class="spinner" aria-hidden="true"></span> Uploading ' + E(u.fileName) + '…</span>';
+    if (u && u.state === 'uploading') return '<span class="upload-file"><span class="spinner" aria-hidden="true"></span>Uploading ' + E(u.fileName) + '…</span>';
     if (cur) {
-      return '<span class="upload-file"><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) +
-        ' · ' + E(App.fmtBytes(cur.fileSize)) + ' · ' + E(App.fmtDateTime(cur.uploadedAt)) + '</span>';
+      return '<span class="upload-file">' + (u && u.state === 'done' ? '<span style="color:var(--ok)">' + I('checkCircle', 15) + '</span>' : '') +
+        '<span><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) + ' · ' + E(App.fmtBytes(cur.fileSize)) + ' · ' + E(App.fmtDateTime(cur.uploadedAt)) + '</span></span>';
     }
-    return '<span class="upload-file ' + (r.mandatory ? '' : 'muted') + '">' + (r.mandatory ? 'Not uploaded yet' : 'Not uploaded (optional)') + '</span>';
+    return '<span class="upload-file muted">' + (r.mandatory ? 'Not uploaded yet: drop a file here or choose one' : 'Optional: drop a file here or choose one') + '</span>';
   }
 
   function uploadButton(r) {
     const u = st.uploading[r.requirementId];
     const cur = r.current;
-    return '<label class="btn btn-secondary btn-sm file-btn">' + (cur ? 'Upload renewed version' : 'Choose file') +
-      '<input type="file" accept="' + ACCEPT + '" data-upload-req="' + E(r.requirementId) + '" aria-label="' +
-      E((cur ? 'Upload a renewed version of ' : 'Upload ') + r.name) + '"' + (u && u.state === 'uploading' ? ' disabled' : '') + '></label>';
+    return '<button type="button" class="btn btn-' + (cur ? 'secondary' : 'primary') + ' btn-sm file-btn" data-pick-req="' + E(r.requirementId) + '" aria-label="' +
+      E((cur ? 'Upload a renewed version of ' : 'Upload ') + r.name) + '"' + (u && u.state === 'uploading' ? ' disabled' : '') + '>' +
+      I(cur ? 'refresh' : 'upload', 15) + (cur ? 'Upload renewed version' : 'Choose file') + '</button>';
   }
 
   /* ---------------------------------------------------------------- Wizard */
@@ -569,11 +654,14 @@
     if (!st.master) return;
     st.uploading = {};
     if (detail) {
-      const reqs = detail.requirements.map(editableReq);
+      let reqs = detail.requirements.map(editableReq);
+      // A draft saved with a category but no checklist yet: start from that category's suggestions.
+      const suggestNow = !reqs.length && !!detail.supplier.categoryId;
+      if (suggestNow) reqs = suggested(detail.supplier.categoryId);
       st.wizard = {
-        step: !detail.supplier.categoryId ? 2 : (!reqs.length ? 3 : 4),
+        step: !detail.supplier.categoryId ? 2 : (suggestNow ? 3 : 4),
         supplierId: detail.supplier.supplierId, info: pickInfo(detail.supplier), requirements: reqs,
-        errors: {}, dirty: false, detail: detail, done: null, pendingCategory: null
+        errors: {}, dirty: suggestNow, detail: detail, done: null, pendingCategory: null
       };
     } else {
       st.wizard = {
@@ -581,26 +669,40 @@
         errors: {}, dirty: false, detail: null, done: null, pendingCategory: null
       };
     }
-    showView('wizard');
-    renderWizard();
+    st.detail = null;
+    renderWizard(null);
+    showView('wizard', 'enter');
   }
 
-  function renderWizard() {
+  /** direction: 'forward' | 'back' | null (no step animation) */
+  function renderWizard(direction) {
     const w = st.wizard;
     const view = byId('m1-wizard-view');
+    view.classList.toggle('no-anim', !direction && !w.done);
     if (w.done) { view.innerHTML = renderDone(); return; }
-    const heading = w.supplierId ? 'Continue registration: ' + (w.info.supplierName || w.supplierId) : 'Add existing supplier';
-    const sub = w.supplierId ? 'Supplier ID ' + w.supplierId + ' · saved as a draft' : 'The supplier ID is assigned when you first save.';
+    const heading = w.supplierId ? 'Continue registration' : 'Add existing supplier';
     view.innerHTML =
-      '<div class="wizard-head"><div><h1 class="page-title">' + E(heading) + '</h1><p class="page-sub">' + E(sub) + '</p></div>' +
-      '<button type="button" class="btn btn-secondary" data-w="close">Back to all suppliers</button></div>' +
-      '<ol class="stepper" aria-label="Registration steps">' + STEPS.map((label, i) => {
-        const n = i + 1;
-        const cls = n < w.step ? 'done' : (n === w.step ? 'current' : '');
-        return '<li class="' + cls + '"' + (n === w.step ? ' aria-current="step"' : '') + '><span class="num" aria-hidden="true">' + (n < w.step ? '✓' : n) + '</span>' +
-          '<span><span class="visually-hidden">Step ' + n + (n < w.step ? ', done' : '') + ': </span>' + E(label) + '</span></li>';
-      }).join('') + '</ol>' +
-      '<div class="card"><div class="wizard-body" id="m1-wizard-body">' + stepBody() + '</div><div class="wizard-foot">' + stepFoot() + '</div></div>';
+      '<div class="wizard-head"><div><button type="button" class="btn btn-ghost btn-sm back" data-w="close" style="margin:0 0 8px -10px">' + I('arrowLeft', 16) + 'All suppliers</button>' +
+        '<h1 class="page-title">' + E(heading) + '</h1><p class="page-sub">' +
+        (w.supplierId ? E(w.info.supplierName || w.supplierId) + ' · <span class="chip chip-brand">' + E(w.supplierId) + '</span> saved as a draft' : 'The supplier ID is assigned when you first save.') +
+        '</p></div></div>' +
+      '<div class="card">' +
+        '<ol class="steps" aria-label="Registration steps">' + STEPS.map((label, i) => {
+          const n = i + 1;
+          const cls = n < w.step ? 'done' : (n === w.step ? 'current' : '');
+          return '<li class="step ' + cls + '"' + (n === w.step ? ' aria-current="step"' : '') + '><span class="step-dot" aria-hidden="true">' + (n < w.step ? I('check', 15) : n) + '</span>' +
+            '<span><span class="visually-hidden">Step ' + n + (n < w.step ? ', done' : '') + ': </span>' + E(label) + '</span></li>';
+        }).join('') + '</ol>' +
+        '<div class="steps-compact"><div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:8px"><span>Step ' + w.step + ' of 5</span><span class="muted">' + E(STEPS[w.step - 1]) + '</span></div>' +
+          '<div class="progress-bar"><div class="progress-fill" style="width:' + (w.step * 20) + '%"></div></div></div>' +
+        '<div style="border-top:1px solid var(--border)"><div class="wizard-body" id="m1-wizard-body">' + stepBody() + '</div></div>' +
+        '<div class="wizard-foot">' + stepFoot() + '</div></div>';
+    if (direction) {
+      App.animateIn(byId('m1-wizard-body'), direction === 'back' ? 'enter-left' : 'enter-right');
+      if (view.getBoundingClientRect().top < 0) view.scrollIntoView({ behavior: App.reduceMotion ? 'auto' : 'smooth', block: 'start' });
+      const heading = byId('m1-wizard-body').querySelector('.step-title');
+      if (heading) heading.focus({ preventScroll: true });
+    }
   }
 
   function renderWizardChecklist() {
@@ -611,55 +713,62 @@
   function stepBody() {
     const w = st.wizard;
     if (w.step === 1) {
-      return '<div><h2 class="step-title">Supplier information</h2><p class="muted small">Fields marked * are needed to register. A draft only needs the company name.</p></div>' +
-        '<div class="callout info">Only suppliers already approved by Procurement are registered here. Silent Expiry Guardian doesn’t evaluate or approve suppliers.</div>' +
+      return '<div><h2 class="step-title" tabindex="-1">Supplier information</h2><p class="muted small" style="margin-top:4px">Fields marked * are needed to register. A draft only needs the company name.</p></div>' +
+        '<div class="callout info">' + I('info', 18) + '<span>Only suppliers already approved by Procurement are registered here. AlphaTrack doesn’t evaluate or approve suppliers.</span></div>' +
         infoFormHtml(w.info, w.errors, 'w', false);
     }
     if (w.step === 2) {
       const chosen = w.pendingCategory || w.info.categoryId;
-      return '<div><h2 class="step-title">Supplier category</h2><p class="muted small">The category suggests a document checklist. You can change the checklist in the next step.</p></div>' +
+      return '<div><h2 class="step-title" tabindex="-1">Supplier category</h2><p class="muted small" style="margin-top:4px">The category suggests a document checklist. You can change it in the next step.</p></div>' +
         '<div class="cat-grid" role="radiogroup" aria-label="Supplier category">' + st.master.categories.map((c) =>
-          '<label class="cat-card"><span class="cat-top"><input type="radio" name="w-category" value="' + E(c.categoryId) + '"' + (chosen === c.categoryId ? ' checked' : '') + '>' +
-          E(c.name) + '</span><span class="muted small">' + E(c.description) + '</span><ul class="cat-docs">' +
-          suggested(c.categoryId).map((d) => '<li>' + E(typeOf(d.docTypeId).name) + (d.mandatory ? '' : ' <span class="muted">(optional)</span>') + '</li>').join('') +
+          '<label class="cat-card"><input type="radio" name="w-category" value="' + E(c.categoryId) + '"' + (chosen === c.categoryId ? ' checked' : '') + '>' +
+          '<span class="cat-check" aria-hidden="true">' + I('check', 13) + '</span>' +
+          '<span style="display:flex;align-items:center;gap:12px">' + categoryTile(c.categoryId) + '<span class="cat-name">' + E(c.name) + '</span></span>' +
+          '<span class="muted small">' + E(c.description) + '</span><ul class="cat-docs">' +
+          suggested(c.categoryId).map((d) => '<li>' + I(CLASS_ICON[typeOf(d.docTypeId).documentClass] || 'file', 14) + E(typeOf(d.docTypeId).name) + (d.mandatory ? '' : ' <span class="muted">(optional)</span>') + '</li>').join('') +
           '</ul></label>').join('') + '</div>' +
-        (w.errors.categoryId ? '<span class="error-text" role="alert">' + E(w.errors.categoryId) + '</span>' : '');
+        (w.errors.categoryId ? '<span class="error-text" role="alert">' + I('alert', 14) + E(w.errors.categoryId) + '</span>' : '');
     }
     if (w.step === 3) {
-      return '<div><h2 class="step-title">Document checklist</h2><p class="muted small">Suggested for <strong>' + E(categoryName(w.info.categoryId)) +
+      return '<div><h2 class="step-title" tabindex="-1">Document checklist</h2><p class="muted small" style="margin-top:4px">Suggested for <strong>' + E(categoryName(w.info.categoryId)) +
         '</strong>. Changes apply to this supplier only; the category defaults live in the CategoryRequirements tab of the Sheet.</p></div>' +
-        '<div id="m1-checklist">' + checklistHtml(w.requirements, 'w') + '</div>' +
-        (w.errors.requirements ? '<span class="error-text" role="alert">' + E(w.errors.requirements) + '</span>' : '');
+        '<div id="m1-checklist" class="section-gap" style="gap:14px">' + checklistHtml(w.requirements, 'w') + '</div>' +
+        (w.errors.requirements ? '<span class="error-text" role="alert">' + I('alert', 14) + E(w.errors.requirements) + '</span>' : '');
     }
     if (w.step === 4) {
       const reqs = w.detail ? w.detail.requirements : [];
       const mandatory = reqs.filter((r) => r.mandatory);
       const uploaded = mandatory.filter((r) => r.current).length;
-      return '<div><h2 class="step-title">Upload documents</h2><p class="muted small">Each file goes straight into this supplier’s Google Drive folder and is queued for AI extraction. ' +
+      const pct = mandatory.length ? Math.round((uploaded / mandatory.length) * 100) : 0;
+      return '<div><h2 class="step-title" tabindex="-1">Upload documents</h2><p class="muted small" style="margin-top:4px">Each file is saved in this supplier’s Google Drive folder and queued for AI extraction. ' +
         'You can skip a document and upload it later; the supplier then stays “Pending documents”.</p></div>' +
-        '<div class="callout ' + (uploaded === mandatory.length ? 'ok' : 'neutral') + '" aria-live="polite"><span><strong>' + uploaded + ' of ' + mandatory.length +
-        '</strong> mandatory documents uploaded.</span></div>' +
-        '<div class="upload-list">' + reqs.map((r) =>
-          '<div class="upload-row' + (r.current ? ' done' : '') + '" data-drop-req="' + E(r.requirementId) + '">' +
-          '<div class="upload-info"><span class="upload-name">' + E(r.name) + ' ' + needChip(r.mandatory) + ' ' + classChip(r.documentClass) +
-          (r.current ? ' ' + extractionChip(r.current.extractionStatus) : '') + '</span>' + uploadState(r) +
-          (st.uploading[r.requirementId] && st.uploading[r.requirementId].state === 'error' ? '<span class="error-text" role="alert">' + E(st.uploading[r.requirementId].message) + '</span>' : '') +
-          '</div><div class="upload-actions">' +
-          (r.current ? '<a class="btn btn-ghost btn-sm" href="' + E(r.current.fileUrl) + '" target="_blank" rel="noopener">View file</a>' : '') +
-          uploadButton(r) + '</div></div>').join('') + '</div>' +
-        '<p class="hint">PDF preferred; PNG and JPG scans are accepted. Up to 10 MB each. You can also drag a file onto a row. The same file can’t be uploaded twice.</p>';
+        '<div class="card card-pad" style="box-shadow:none;background:var(--surface-2)" aria-live="polite"><div style="display:flex;justify-content:space-between;gap:10px;font-size:13.5px;font-weight:600;margin-bottom:8px">' +
+          '<span>' + uploaded + ' of ' + mandatory.length + ' mandatory documents uploaded</span><span class="muted num">' + pct + '%</span></div>' +
+          '<div class="progress-bar"><div class="progress-fill' + (pct === 100 ? ' full' : '') + '" style="width:' + pct + '%"></div></div></div>' +
+        '<div class="upload-list stagger">' + reqs.map((r, i) => {
+          const u = st.uploading[r.requirementId];
+          return '<div class="upload-row' + (r.current ? ' done' : '') + '" data-drop-req="' + E(r.requirementId) + '" style="--i:' + i + '">' +
+            '<div class="upload-info">' + classTile(r.documentClass, 42) + '<div class="upload-text"><span class="upload-name">' + E(r.name) + ' ' + needChip(r.mandatory) +
+            (r.current ? ' ' + extractionChip(r.current.extractionStatus) : '') + '</span>' + uploadStatus(r) +
+            (u && u.state === 'error' ? '<span class="error-text" role="alert">' + I('alert', 14) + E(u.message) + '</span>' : '') +
+            '</div></div><div class="upload-actions">' +
+            (r.current ? '<a class="btn btn-ghost btn-sm" href="' + E(safeUrl(r.current.fileUrl)) + '" target="_blank" rel="noopener">' + I('eye', 15) + 'View file</a>' : '') +
+            uploadButton(r) + '</div>' + (u && u.state === 'uploading' ? '<span class="loading-bar" aria-hidden="true"></span>' : '') + '</div>';
+        }).join('') + '</div>' +
+        '<p class="hint">PDF preferred; PNG and JPG scans are accepted. Up to 10 MB each. The same file can’t be uploaded twice.</p>';
     }
     const d = w.detail;
     const missing = d.requirements.filter((r) => r.mandatory && !r.current).map((r) => r.name);
     const predicted = missing.length ? 'PENDING_DOCUMENTS' : 'PENDING_VERIFICATION';
-    return '<div><h2 class="step-title">Review and submit</h2><p class="muted small">Check the details, then register the supplier. You can still edit everything afterwards.</p></div>' +
-      '<div class="summary-grid"><div><h3 class="card-title" style="margin-bottom:10px">Supplier</h3>' + factsHtml(w.info, w.supplierId) + '</div>' +
-      '<div><h3 class="card-title" style="margin-bottom:10px">Documents</h3><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">' +
-      d.requirements.map((r) => '<li>' + E(r.name) + ': ' + (r.current
-        ? '<span style="color:var(--ok);font-weight:600">uploaded (version ' + r.current.version + ')</span>'
-        : (r.mandatory ? '<span style="color:var(--danger);font-weight:600">missing</span>' : '<span class="muted">not uploaded (optional)</span>')) + '</li>').join('') +
+    return '<div><h2 class="step-title" tabindex="-1">Review and submit</h2><p class="muted small" style="margin-top:4px">Check the details, then register the supplier. You can still edit everything afterwards.</p></div>' +
+      '<div class="summary-grid"><div class="summary-box"><h3 class="card-title" style="margin-bottom:12px">Supplier</h3>' + factsHtml(w.info, w.supplierId) + '</div>' +
+      '<div class="summary-box"><h3 class="card-title" style="margin-bottom:12px">Documents</h3><ul class="list">' +
+      d.requirements.map((r) => '<li style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border)">' + classTile(r.documentClass, 30) +
+        '<span style="flex:1 1 auto;min-width:0;font-weight:600;font-size:13.5px">' + E(r.name) + '</span>' + (r.current
+        ? chip('st-active', 'Version ' + r.current.version, true)
+        : (r.mandatory ? chip('crit-HIGH', 'Missing', true) : chip('chip-neutral', 'Optional'))) + '</li>').join('') +
       '</ul></div></div>' +
-      '<div class="callout ' + (missing.length ? 'warn' : 'info') + '"><div>After you register, the status will be ' + statusChip(predicted) + '<br>' +
+      '<div class="callout ' + (missing.length ? 'warn' : 'info') + '">' + I(missing.length ? 'alert' : 'info', 18) + '<div>After you register, the status will be ' + statusChip(predicted) + '<br>' +
       (missing.length
         ? 'Still missing: ' + E(missing.join(', ')) + '. The supplier is registered, but isn’t treated as complete until these arrive.'
         : 'All mandatory documents are uploaded. Next they are read by AI Document Analysis.') + '</div></div>';
@@ -667,26 +776,31 @@
 
   function stepFoot() {
     const w = st.wizard;
-    const back = w.step > 1 ? '<button type="button" class="btn btn-secondary" data-w="back">Back</button>' : '';
+    const back = w.step > 1 ? '<button type="button" class="btn btn-secondary" data-w="back">' + I('arrowLeft', 16) + 'Back</button>' : '';
     const save = w.step <= 3
       ? '<button type="button" class="btn btn-ghost" data-w="draft">Save as draft</button>'
       : '<button type="button" class="btn btn-ghost" data-w="later">Finish later</button>';
     const nextLabel = { 1: 'Continue', 2: 'Continue', 3: 'Save checklist and continue', 4: 'Continue to review' }[w.step];
+    const uploading = Object.keys(st.uploading).some((k) => st.uploading[k].state === 'uploading');
+    const wait = uploading ? ' disabled title="Wait for the upload to finish"' : '';
     const next = w.step < 5
-      ? '<button type="button" class="btn btn-primary" data-w="next">' + nextLabel + '</button>'
-      : '<button type="button" class="btn btn-primary" data-w="submit">Register supplier</button>';
+      ? '<button type="button" class="btn btn-primary" data-w="next"' + (w.step === 4 ? wait : '') + '>' + nextLabel + I('arrowRight', 16) + '</button>'
+      : '<button type="button" class="btn btn-primary" data-w="submit"' + wait + '>' + I('check', 16) + 'Register supplier</button>';
     return back + '<span class="spacer"></span>' + save + next;
   }
 
   function renderDone() {
     const d = st.wizard.done;
-    return '<div class="card card-pad section-gap" style="max-width:760px" role="status">' +
-      '<div class="callout ok"><strong>' + E(d.supplier.supplierName) + ' is registered as ' + E(d.supplier.supplierId) + '.</strong></div>' +
-      '<div>Registration status: ' + statusChip(d.supplier.registrationStatus) + '</div><p>' + E(d.registration.explanation) + '</p>' +
-      '<p class="muted small">Registration status shows whether the paperwork is complete. Whether each document is valid, expiring or expired is shown in Expiry &amp; Risk Analysis.</p>' +
-      '<div style="display:flex;flex-wrap:wrap;gap:10px"><button type="button" class="btn btn-primary" data-w="open-detail">Open supplier</button>' +
-      '<button type="button" class="btn btn-secondary" data-w="another">Register another supplier</button>' +
-      '<button type="button" class="btn btn-ghost" data-w="list">Back to all suppliers</button></div></div>';
+    return '<div class="card enter"><div class="done-panel" role="status">' +
+      '<svg class="done-mark" width="84" height="84" viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<circle cx="32" cy="32" r="25" stroke="#12A16B" stroke-width="3.5"/><path d="M21 33l8 8 15-17" stroke="#12A16B" stroke-width="4"/></svg>' +
+      '<h1 class="page-title">' + E(d.supplier.supplierName) + ' is registered</h1>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">' + chip('chip-brand', d.supplier.supplierId) + statusChip(d.supplier.registrationStatus) + '</div>' +
+      '<p class="muted">' + E(d.registration.explanation) + '</p>' +
+      '<p class="small muted">Registration status shows whether the paperwork is complete. Whether each document is valid, expiring or expired is shown in Expiry &amp; Risk.</p>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:6px"><button type="button" class="btn btn-primary" data-w="open-detail">Open supplier' + I('arrowRight', 16) + '</button>' +
+      '<button type="button" class="btn btn-secondary" data-w="another">' + I('plus', 16) + 'Register another</button>' +
+      '<button type="button" class="btn btn-ghost" data-w="list">Back to all suppliers</button></div></div></div>';
   }
 
   function captureStep() {
@@ -701,23 +815,20 @@
   }
 
   function focusFirstError() {
-    const el = document.querySelector('#m1-wizard-body [aria-invalid="true"], #m1-wizard-body [role="alert"]');
-    if (el) el.focus ? el.focus() : null;
+    const el = document.querySelector('#m1-wizard-body [aria-invalid="true"]');
+    if (el) el.focus();
   }
 
   async function wizardAction(action, button) {
     const w = st.wizard;
     if (action === 'close' || action === 'list') {
-      if (action === 'close') captureStep();
-      if (w.dirty && !w.done && !(await App.confirm('Leave without saving your latest changes?', 'Leave without saving', 'danger'))) return;
-      st.wizard = null;
-      showView('list');
+      if (!(await canLeaveWizard())) return;
+      backToList();
       reloadList();
       return;
     }
     if (action === 'later') {
-      st.wizard = null;
-      showView('list');
+      backToList();
       reloadList();
       App.toast('Draft kept. Continue it any time from the supplier list.');
       return;
@@ -726,11 +837,12 @@
       captureStep();
       w.step -= 1;
       w.errors = {};
-      renderWizard();
+      renderWizard('back');
       return;
     }
     if (action === 'draft') {
       captureStep();
+      if (w.step === 2 && (w.pendingCategory || w.info.categoryId)) await applyCategoryChoice(w.pendingCategory || w.info.categoryId);
       await busy(button, 'Saving…', () => saveDraft(true));
       return;
     }
@@ -738,7 +850,6 @@
     if (action === 'submit') { await busy(button, 'Registering…', submitRegistration); return; }
     if (action === 'open-detail') {
       const id = w.done.supplier.supplierId;
-      st.wizard = null;
       openDetail(id);
       return;
     }
@@ -750,51 +861,69 @@
     captureStep();
     if (w.step === 1) {
       w.errors = validateInfo(w.info, true);
-      renderWizard();
-      if (Object.keys(w.errors).length) { focusFirstError(); return; }
+      if (Object.keys(w.errors).length) {
+        renderWizard(null);
+        focusFirstError();
+        return;
+      }
       w.step = 2;
-      renderWizard();
+      renderWizard('forward');
       return;
     }
     if (w.step === 2) {
       const chosen = w.pendingCategory || w.info.categoryId;
       if (!chosen) {
         w.errors = { categoryId: 'Choose a category to continue.' };
-        renderWizard();
+        renderWizard(null);
         return;
       }
-      if (!w.requirements.length) {
-        w.requirements = suggested(chosen);
-      } else if (chosen !== w.info.categoryId) {
-        const replace = await App.confirm('Replace the current checklist with the suggested documents for ' + categoryName(chosen) + '?', 'Replace checklist');
-        if (replace) w.requirements = suggested(chosen);
-      }
-      w.info.categoryId = chosen;
-      w.pendingCategory = null;
+      await applyCategoryChoice(chosen);
       w.errors = {};
-      w.dirty = true;
       w.step = 3;
-      renderWizard();
+      renderWizard('forward');
       return;
     }
     if (w.step === 3) {
       const problem = checklistProblem(w.requirements);
       if (problem) {
         w.errors = { requirements: problem };
-        renderWizard();
+        renderWizard(null);
         return;
       }
       const ok = await saveDraft(false);
       if (ok) {
         w.step = 4;
-        renderWizard();
+        renderWizard('forward');
       }
       return;
     }
     if (w.step === 4) {
       w.step = 5;
-      renderWizard();
+      renderWizard('forward');
     }
+  }
+
+  /** Makes the picked category the supplier's category, suggesting (or offering to replace) the checklist. */
+  async function applyCategoryChoice(chosen) {
+    const w = st.wizard;
+    if (!w.requirements.length) {
+      w.requirements = suggested(chosen);
+    } else if (chosen !== w.info.categoryId) {
+      const replace = await App.confirm('Replace the current checklist with the suggested documents for ' + categoryName(chosen) + '?', 'Replace checklist');
+      if (replace) w.requirements = suggested(chosen);
+    }
+    if (chosen !== w.info.categoryId) w.dirty = true;
+    w.info.categoryId = chosen;
+    w.pendingCategory = null;
+  }
+
+  /** True when it's fine to leave the wizard: nothing unsaved, or the user agreed to drop it. */
+  async function canLeaveWizard() {
+    const w = st.wizard;
+    if (!w || w.done || st.view !== 'wizard') return true;
+    captureStep();
+    if (!w.dirty) return true;
+    return App.confirm('Leave without saving your latest changes?', 'Leave without saving', 'danger');
   }
 
   /** Saves the wizard as a draft. Returns true if it worked. */
@@ -802,8 +931,9 @@
     const w = st.wizard;
     if (String(w.info.supplierName || '').trim().length < 2) {
       w.errors = { supplierName: 'Enter the supplier company name before saving.' };
+      const moved = w.step !== 1;
       w.step = 1;
-      renderWizard();
+      renderWizard(moved ? 'back' : null);
       focusFirstError();
       return false;
     }
@@ -820,7 +950,7 @@
       w.errors = {};
       if (announce) {
         App.toast('Draft saved as ' + w.supplierId + '.', 'ok');
-        renderWizard();
+        renderWizard(null);
       }
       return true;
     } catch (err) {
@@ -835,7 +965,8 @@
       const detail = await App.api('M1_registerSupplier', w.supplierId);
       w.done = detail;
       w.dirty = false;
-      renderWizard();
+      renderWizard(null);
+      reloadList();
       App.toast(detail.supplier.supplierId + ' registered.', 'ok');
     } catch (err) {
       App.toast(err.message, 'error');
@@ -847,16 +978,17 @@
   async function openDetail(supplierId) {
     st.uploading = {};
     st.openHistory = {};
-    showView('detail');
+    st.wizard = null;
+    st.detail = null;
     byId('m1-detail-view').innerHTML = loadingBlock('Loading ' + supplierId + '…');
+    showView('detail', 'enter');
     try {
       st.detail = await App.api('M1_getSupplierDetail', supplierId);
-      renderDetail();
+      renderDetail(true);
+      App.animateIn(byId('m1-detail-view'));
     } catch (err) {
-      st.detail = null;
-      byId('m1-detail-view').innerHTML = '<button type="button" class="btn btn-ghost back" data-m1-back>← All suppliers</button>' +
-        '<div class="card empty"><h3>Couldn’t open ' + E(supplierId) + '</h3><p>' + E(err.message) + '</p></div>';
-      byId('m1-detail-view').querySelector('[data-m1-back]').addEventListener('click', () => { showView('list'); reloadList(); });
+      byId('m1-detail-view').innerHTML = '<button type="button" class="btn btn-ghost btn-sm back" data-d="back">' + I('arrowLeft', 16) + 'All suppliers</button>' +
+        '<div class="card empty"><span class="empty-art tone-danger">' + I('xCircle', 28) + '</span><h3>Couldn’t open ' + E(supplierId) + '</h3><p>' + E(err.message) + '</p></div>';
     }
   }
 
@@ -865,91 +997,111 @@
     try {
       st.detail = await App.api('M1_getSupplierDetail', st.detail.supplier.supplierId);
       renderDetail();
-      App.toast('Refreshed.');
+      App.toast('Refreshed.', 'ok');
     } catch (err) {
       App.toast(err.message, 'error');
     }
   }
 
-  function renderDetail() {
+  function renderDetail(animate) {
+    byId('m1-detail-view').classList.toggle('no-anim', !animate);
     const d = st.detail;
     const s = d.supplier;
-    const st0 = STATUS[s.registrationStatus] || { label: s.registrationStatus, callout: 'neutral' };
+    const meta = STATUS[s.registrationStatus] || { label: s.registrationStatus, callout: 'neutral', icon: 'info' };
+    const off = !!s.deactivated;
+    const actions = off
+      ? '<button type="button" class="btn btn-primary" data-d="reactivate">' + I('refresh', 16) + 'Reactivate supplier</button>'
+      : (s.registrationStatus === 'DRAFT' ? '<button type="button" class="btn btn-primary" data-d="continue">' + I('arrowRight', 16) + 'Continue registration</button>' : '') +
+        '<button type="button" class="btn btn-secondary" data-d="edit-info">' + I('edit', 16) + 'Edit details</button>' +
+        '<button type="button" class="btn btn-secondary" data-d="edit-reqs">' + I('list', 16) + 'Edit checklist</button>';
+    const callout = off
+      ? '<div class="callout neutral">' + I('xCircle', 18) + '<div><strong>Deactivated:</strong> AlphaTrack no longer monitors this supplier. ' +
+        'There is no AI reading, expiry checking or reminders. Every record and document is kept.' +
+        '<div class="small" style="margin-top:3px;opacity:0.85">' + E('Deactivated ' + App.fmtDateTime(s.deactivatedAt) + (s.deactivatedBy ? ' by ' + s.deactivatedBy : '') +
+        '. Reason: ' + (s.deactivationReason || 'not given') + '.') + '</div></div></div>'
+      : '<div class="callout ' + meta.callout + '">' + I(meta.icon || 'info', 18) + '<div><strong>' + E(meta.label) + ':</strong> ' + E(d.registration.explanation) +
+        '<div class="small" style="margin-top:3px;opacity:0.85">This is registration progress. Expiry and compliance status come from Expiry &amp; Risk.</div></div></div>';
     byId('m1-detail-view').innerHTML =
-      '<button type="button" class="btn btn-ghost back" data-d="back">← All suppliers</button>' +
-      '<div class="detail-head"><div><h1 class="page-title">' + E(s.supplierName) + '</h1><div class="detail-chips">' +
-        chip('chip-neutral', s.supplierId) + (s.categoryName ? chip('chip-neutral', s.categoryName) : '') + critChip(s.criticality) + statusChip(s.registrationStatus) +
-      '</div></div><div class="detail-actions">' +
-        (s.registrationStatus === 'DRAFT' ? '<button type="button" class="btn btn-primary" data-d="continue">Continue registration</button>' : '') +
-        '<button type="button" class="btn btn-secondary" data-d="edit-info">Edit details</button>' +
-        '<button type="button" class="btn btn-secondary" data-d="edit-reqs">Edit document checklist</button>' +
-        (s.driveFolderUrl ? '<a class="btn btn-ghost" href="' + E(s.driveFolderUrl) + '" target="_blank" rel="noopener">Open Drive folder</a>' : '') +
-        '<button type="button" class="btn btn-ghost" data-d="refresh">Refresh</button>' +
-      '</div></div>' +
-      '<div class="callout ' + st0.callout + '"><div><strong>' + E(st0.label) + ':</strong> ' + E(d.registration.explanation) +
-        '<div class="small" style="margin-top:4px;opacity:0.85">This is registration progress. Expiry and compliance status come from Expiry &amp; Risk Analysis.</div></div></div>' +
-      '<div class="detail-grid"><div class="section-gap">' + documentsCard(d) + otherDocumentsCard(d) + '</div>' +
-      '<div class="section-gap detail-side">' + infoCard(d) + activityCard(d) + '</div></div>';
+      '<button type="button" class="btn btn-ghost btn-sm back" data-d="back" style="margin-left:-10px">' + I('arrowLeft', 16) + 'All suppliers</button>' +
+      '<section class="card detail-hero"><div class="detail-id"><span class="avatar lg">' + E(App.initials(s.supplierName)) + '</span><div style="min-width:0">' +
+        '<h1 class="page-title">' + E(s.supplierName) + '</h1><div class="detail-chips">' +
+        chip('chip-brand', s.supplierId) + (s.categoryName ? '<span class="chip chip-neutral">' + I(CATEGORY_ICON[s.categoryId] || 'building', 13) + E(s.categoryName) + '</span>' : '') +
+        critChip(s.criticality) + (off ? deactivatedChip() : statusChip(s.registrationStatus)) + '</div></div></div>' +
+        '<div class="detail-actions">' + actions +
+        (s.driveFolderUrl ? '<a class="btn btn-secondary" href="' + E(safeUrl(s.driveFolderUrl)) + '" target="_blank" rel="noopener">' + I('folder', 16) + 'Open Drive folder</a>' : '') +
+        '<button type="button" class="btn btn-ghost btn-icon" data-d="refresh" aria-label="Refresh">' + I('refresh', 17) + '</button>' +
+      '</div></section>' +
+      callout +
+      '<div class="grid-3-1"><div class="section-gap">' + documentsCard(d) + otherDocumentsCard(d) + '</div>' +
+      '<div class="section-gap detail-side">' + infoCard(d) + (off ? '' : deactivateCard()) + activityCard(d) + '</div></div>';
   }
 
   function documentsCard(d) {
     const mandatory = d.requirements.filter((r) => r.mandatory);
     const uploaded = mandatory.filter((r) => r.current).length;
-    return '<section class="card" aria-labelledby="m1-docs-title"><div class="card-head"><h2 class="card-title" id="m1-docs-title">Documents</h2>' +
-      '<span class="muted small">' + uploaded + ' of ' + mandatory.length + ' mandatory uploaded</span></div>' +
-      (d.requirements.length ? d.requirements.map(requirementCard).join('')
-        : '<div class="empty"><h3>No document checklist yet</h3><p>Use “Edit document checklist” to add the documents this supplier must provide.</p></div>') +
+    const pct = mandatory.length ? Math.round((uploaded / mandatory.length) * 100) : 0;
+    return '<section class="card" aria-labelledby="m1-docs-title"><div class="card-head ruled"><div><h2 class="card-title" id="m1-docs-title">Documents</h2>' +
+      '<p class="card-sub">' + uploaded + ' of ' + mandatory.length + ' mandatory documents uploaded' +
+      (d.supplier.deactivated ? '' : ' · drop a file on any row to upload it') + '</p></div>' +
+      '<div class="progress" style="min-width:160px"><div class="progress-bar"><div class="progress-fill' + (pct === 100 ? ' full' : '') + '" style="width:' + pct + '%"></div></div><span class="progress-text">' + pct + '%</span></div></div>' +
+      (d.requirements.length ? '<div class="stagger">' + d.requirements.map(requirementCard).join('') + '</div>'
+        : '<div class="empty"><span class="empty-art tone-neutral">' + I('list', 28) + '</span><h3>No document checklist yet</h3><p>Use “Edit checklist” to add the documents this supplier must provide.</p></div>') +
       '</section>';
   }
 
-  function requirementCard(r) {
+  function requirementCard(r, i) {
     const u = st.uploading[r.requirementId];
     const cur = r.current;
     const timing = r.hasExpiry
       ? 'Reminder ' + r.reminderDays + ' days before ' + (r.documentClass === 'CONTRACT' ? 'the end date' : 'expiry')
       : 'No formal expiry · ' + (r.reviewDate ? 'review on ' + App.fmtDate(r.reviewDate) : 'no review date set');
     let current;
-    if (u && u.state === 'uploading') current = uploadState(r);
+    if (u && u.state === 'uploading') current = uploadStatus(r);
     else if (cur) {
-      current = '<span><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) + '</span>' +
+      current = (u && u.state === 'done' ? '<span style="color:var(--ok)">' + I('checkCircle', 16) + '</span>' : '') +
+        '<span><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) + '</span>' +
         '<span class="muted">' + E(App.fmtDateTime(cur.uploadedAt)) + ' · ' + E(App.fmtBytes(cur.fileSize)) + '</span>' +
-        extractionChip(cur.extractionStatus) + '<a href="' + E(cur.fileUrl) + '" target="_blank" rel="noopener">View file</a>';
+        extractionChip(st.detail && st.detail.supplier.deactivated && App.isWaitingForAi(cur.extractionStatus) ? 'PAUSED' : cur.extractionStatus) +
+        '<a href="' + E(safeUrl(cur.fileUrl)) + '" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:4px;font-weight:600">' + I('eye', 15) + 'View file</a>';
     } else {
-      current = r.mandatory ? '<span class="error-text">Missing: not uploaded yet</span>' : '<span class="muted">Not uploaded (optional)</span>';
+      current = r.mandatory ? '<span class="req-missing">' + I('alert', 15) + 'Missing: not uploaded yet</span>' : '<span class="muted">Not uploaded (optional)</span>';
     }
     const older = r.history.filter((h) => h.lifecycleStatus !== 'ACTIVE');
     const open = !!st.openHistory[r.requirementId];
-    const historyId = 'm1-hist-' + r.requirementId;
-    return '<div class="req-card" data-drop-req="' + E(r.requirementId) + '">' +
-      '<div class="req-top"><span class="req-name">' + E(r.name) + '</span>' + needChip(r.mandatory) + classChip(r.documentClass) + '</div>' +
+    const historyId = 'm1-hist-' + tok(r.requirementId);
+    const off = !!(st.detail && st.detail.supplier.deactivated);
+    return '<div class="req-card"' + (off ? '' : ' data-drop-req="' + E(r.requirementId) + '"') + ' style="--i:' + (i || 0) + '">' + classTile(r.documentClass, 42) +
+      '<div class="req-body"><div class="req-top"><span class="req-name">' + E(r.name) + '</span>' + needChip(r.mandatory) + classChip(r.documentClass) + '</div>' +
       '<div class="req-meta">' + E(timing) + '</div>' +
       '<div class="req-current">' + current + '</div>' +
-      (u && u.state === 'error' ? '<span class="error-text" role="alert">' + E(u.message) + '</span>' : '') +
-      '<div class="upload-actions">' + uploadButton(r) +
+      (u && u.state === 'error' ? '<span class="error-text" role="alert">' + I('alert', 14) + E(u.message) + '</span>' : '') +
+      '<div class="upload-actions">' + (off ? '' : uploadButton(r)) +
         (older.length ? '<button type="button" class="btn btn-ghost btn-sm" data-d="history" data-req="' + E(r.requirementId) + '" aria-expanded="' + open +
-          '" aria-controls="' + historyId + '">Version history (' + r.history.length + ')</button>' : '') + '</div>' +
-      (older.length ? '<ul class="history" id="' + historyId + '"' + (open ? '' : ' hidden') + '>' + r.history.map((h) =>
-        '<li>' + chip(h.lifecycleStatus === 'ACTIVE' ? 'st-active' : 'chip-neutral', 'v' + h.version + (h.lifecycleStatus === 'ACTIVE' ? ' current' : ' replaced')) +
-        '<span>' + E(h.docId) + ' · ' + E(h.originalFileName || h.fileName) + '</span>' +
-        '<span class="muted">' + E(App.fmtDateTime(h.uploadedAt)) + (h.replacedByDocId ? ' · replaced by ' + E(h.replacedByDocId) : '') + '</span>' +
-        '<a href="' + E(h.fileUrl) + '" target="_blank" rel="noopener">View</a></li>').join('') + '</ul>' : '') +
-      '</div>';
+          '" aria-controls="' + historyId + '">' + I('history', 15) + 'Version history (' + r.history.length + ')</button>' : '') + '</div>' +
+      (older.length && open ? '<ul class="history" id="' + historyId + '">' + r.history.map((h) =>
+        '<li>' + chip(h.lifecycleStatus === 'ACTIVE' ? 'st-active' : 'chip-neutral', 'v' + h.version + (h.lifecycleStatus === 'ACTIVE' ? ' · current' : ' · replaced'), true) +
+        '<span class="h-text"><span class="h-file">' + E(h.originalFileName || h.fileName) + '</span>' +
+        '<span class="h-meta">' + E(h.docId) + ' · ' + E(App.fmtDateTime(h.uploadedAt)) + (h.replacedByDocId ? ' · replaced by ' + E(h.replacedByDocId) : '') + '</span></span>' +
+        '<a href="' + E(safeUrl(h.fileUrl)) + '" target="_blank" rel="noopener">View</a></li>').join('') + '</ul>' : '') +
+      (u && u.state === 'uploading' ? '<span class="visually-hidden">Uploading</span>' : '') +
+      '</div></div>';
   }
 
   function otherDocumentsCard(d) {
     if (!d.otherDocuments.length) return '';
-    return '<section class="card" aria-labelledby="m1-other-title"><div class="card-head"><h2 class="card-title" id="m1-other-title">Documents from removed checklist items</h2>' +
-      '<span class="muted small">Kept for history</span></div><ul class="history" style="margin:12px 22px 16px">' + d.otherDocuments.map((h) =>
-        '<li>' + chip('chip-neutral', 'v' + h.version) + '<span>' + E(h.docTypeName) + ' · ' + E(h.docId) + ' · ' + E(h.originalFileName || h.fileName) + '</span>' +
-        '<span class="muted">' + E(App.fmtDateTime(h.uploadedAt)) + '</span><a href="' + E(h.fileUrl) + '" target="_blank" rel="noopener">View</a></li>').join('') +
+    return '<section class="card" aria-labelledby="m1-other-title"><div class="card-head ruled"><div><h2 class="card-title" id="m1-other-title">Documents from removed checklist items</h2>' +
+      '<p class="card-sub">Kept for history; never deleted</p></div></div><ul class="list">' + d.otherDocuments.map((h) =>
+        '<li class="list-row">' + I('layers', 16) + '<span class="list-main"><span class="list-title">' + E(h.docTypeName) + ' · v' + h.version + '</span><br><span class="list-sub">' +
+        E(h.docId) + ' · ' + E(h.originalFileName || h.fileName) + ' · ' + E(App.fmtDateTime(h.uploadedAt)) + '</span></span><a href="' + E(safeUrl(h.fileUrl)) + '" target="_blank" rel="noopener">View</a></li>').join('') +
       '</ul></section>';
   }
 
   function infoCard(d) {
     const s = d.supplier;
-    return '<section class="card" aria-labelledby="m1-info-title"><div class="card-head"><h2 class="card-title" id="m1-info-title">Supplier details</h2></div>' +
-      '<div class="card-pad">' + factsHtml(s, s.supplierId) +
-      '<dl class="facts" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
+    return '<section class="card" aria-labelledby="m1-info-title"><div class="card-head ruled"><h2 class="card-title" id="m1-info-title">Supplier details</h2>' +
+      (s.deactivated ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-d="edit-info">' + I('edit', 15) + 'Edit</button>') + '</div>' +
+      '<div class="card-body">' + factsHtml(s, s.supplierId) +
+      '<dl class="facts" style="margin-top:4px;padding-top:14px;border-top:1px solid var(--border)">' +
         '<dt>Procurement status</dt><dd>' + E(title(s.procurementStatus) || 'Approved') + '</dd>' +
         '<dt>Registered</dt><dd>' + (s.submittedAt ? E(App.fmtDateTime(s.submittedAt)) : '<span class="muted">Not submitted yet</span>') + '</dd>' +
         '<dt>Created</dt><dd>' + E(App.fmtDateTime(s.createdAt)) + '</dd>' +
@@ -958,16 +1110,86 @@
   }
 
   function activityCard(d) {
-    return '<section class="card" aria-labelledby="m1-activity-title"><div class="card-head"><h2 class="card-title" id="m1-activity-title">Activity</h2>' +
-      '<span class="muted small">From the audit log</span></div>' +
-      (d.activity.length ? '<ul class="activity">' + d.activity.map((a) =>
-        '<li><span class="when">' + E(App.fmtDateTime(a.timestamp)) + ' · ' + E(a.actor) + '</span>' +
-        '<span class="what">' + E(ACTION_LABEL[a.action] || a.action) + (a.recordId && a.recordId !== d.supplier.supplierId ? ' · ' + E(a.recordId) : '') + '</span>' +
-        (a.reason ? '<span class="muted">' + E(a.reason) + '</span>' : '') + '</li>').join('') + '</ul>'
+    return '<section class="card" aria-labelledby="m1-activity-title"><div class="card-head ruled"><div><h2 class="card-title" id="m1-activity-title">Activity</h2>' +
+      '<p class="card-sub">From the audit log</p></div></div>' +
+      (d.activity.length ? '<ol class="timeline">' + d.activity.map((a) => {
+        const meta = App.activity(a.action);
+        return '<li class="tl-item"><span class="tl-icon ' + meta[2] + '">' + I(meta[1], 16) + '</span><div>' +
+          '<div class="tl-what">' + E(meta[0]) + (a.recordId && a.recordId !== d.supplier.supplierId ? ' · ' + E(a.recordId) : '') + '</div>' +
+          (a.reason ? '<div class="tl-why">' + E(a.reason) + '</div>' : '') +
+          '<div class="tl-when">' + E(App.fmtDateTime(a.timestamp)) + ' · ' + E(a.actor) + '</div></div></li>';
+      }).join('') + '</ol>'
         : '<div class="empty"><p>No activity yet.</p></div>') + '</section>';
   }
 
+  function deactivateCard() {
+    return '<section class="card" aria-labelledby="m1-deactivate-title"><div class="card-head ruled"><div><h2 class="card-title" id="m1-deactivate-title">Deactivate supplier</h2>' +
+      '<p class="card-sub">For a supplier Alpha Electronics no longer uses</p></div></div>' +
+      '<div class="card-body section-gap" style="gap:12px"><p class="small muted">Stops AI reading, expiry checks and reminders for this supplier. ' +
+      'Nothing is deleted, and you can reactivate it at any time.</p>' +
+      '<div><button type="button" class="btn btn-danger" data-d="deactivate">' + I('xCircle', 16) + 'Deactivate supplier</button></div></div></section>';
+  }
+
   /* ---------------------------------------------------------------- Modals */
+
+  function deactivateModal() {
+    const s = st.detail.supplier;
+    const box = document.createElement('div');
+    box.className = 'section-gap';
+    box.style.gap = '14px';
+    box.innerHTML = '<p>' + E(s.supplierName) + ' (' + E(s.supplierId) + ') will no longer be monitored: no AI reading, expiry checks or reminders.</p>' +
+      '<div class="callout info">' + I('info', 18) + '<span>Nothing is deleted. Its documents and history stay, its Google Drive folder moves into ' +
+      '“Deactivated suppliers”, and you can reactivate it at any time.</span></div>' +
+      '<div class="field"><label class="field-label" for="m1-deactivate-reason">Reason <span class="req-mark" aria-hidden="true">*</span></label>' +
+      '<textarea class="textarea" id="m1-deactivate-reason" rows="3" maxlength="300" aria-required="true" aria-describedby="m1-deactivate-hint" ' +
+      'placeholder="e.g. Contract ended on 31 Oct 2026 and was not renewed"></textarea>' +
+      '<span class="hint" id="m1-deactivate-hint">Saved in the audit log, so everyone can see why.</span>' +
+      '<span class="error-text" id="m1-deactivate-err" role="alert" hidden></span></div>';
+    App.modal({
+      title: 'Deactivate supplier',
+      body: box,
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        {
+          label: 'Deactivate supplier', kind: 'danger', busyLabel: 'Deactivating…',
+          onClick: async () => {
+            const field = box.querySelector('#m1-deactivate-reason');
+            const err = box.querySelector('#m1-deactivate-err');
+            const reason = field.value.replace(/\s+/g, ' ').trim();
+            if (reason.length < 5) {
+              err.hidden = false;
+              err.innerHTML = I('alert', 14) + 'Give a reason of at least 5 characters.';
+              field.setAttribute('aria-invalid', 'true');
+              field.focus();
+              return false;
+            }
+            st.detail = await App.api('M1_deactivateSupplier', s.supplierId, reason);
+            renderDetail();
+            reloadList();
+            App.toast(s.supplierName + ' is deactivated. Its documents are kept.', 'ok');
+            return true;
+          }
+        }
+      ]
+    });
+  }
+
+  async function reactivate(button) {
+    const s = st.detail.supplier;
+    const ok = await App.confirm('Reactivate ' + s.supplierName + '? AI reading, expiry checks and reminders start again, and its Drive folder ' +
+      'moves back into the main folder.', 'Reactivate');
+    if (!ok) return;
+    await busy(button, 'Reactivating…', async () => {
+      try {
+        st.detail = await App.api('M1_reactivateSupplier', s.supplierId);
+        renderDetail();
+        reloadList();
+        App.toast(s.supplierName + ' is active again.', 'ok');
+      } catch (err) {
+        App.toast(err.message, 'error');
+      }
+    });
+  }
 
   function editInfoModal() {
     const s = st.detail.supplier;
@@ -1009,9 +1231,10 @@
     const list = d.requirements.map(editableReq);
     const box = document.createElement('div');
     box.className = 'section-gap';
+    box.style.gap = '14px';
     const render = () => {
       box.innerHTML = '<p class="muted small">Changes apply to ' + E(d.supplier.supplierName) + ' only. Removing a document keeps its uploaded files in the history.</p>' +
-        (d.supplier.categoryId ? '<div><button type="button" class="btn btn-ghost btn-sm" data-req-defaults>Add any missing ' +
+        (d.supplier.categoryId ? '<div><button type="button" class="btn btn-secondary btn-sm" style="white-space:normal;height:auto;text-align:left" data-req-defaults>' + I('plus', 15) + 'Add any missing ' +
           E(categoryName(d.supplier.categoryId)) + ' defaults</button></div>' : '') +
         checklistHtml(list, 'm');
     };
@@ -1023,7 +1246,7 @@
           if (!list.some((r) => r.docTypeId === sug.docTypeId)) { list.push(sug); added++; }
         });
         render();
-        App.toast(added ? added + ' document(s) added.' : 'Every default is already on the checklist.');
+        App.toast(added ? added + ' document(s) added.' : 'Every default is already on the checklist.', added ? 'ok' : '');
         return;
       }
       handleChecklistEvent(e, list, render, 'm');

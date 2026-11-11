@@ -56,15 +56,19 @@ Supplier checklists that differ from the category defaults:
 - **Mutiara Components:** Product Conformity Documentation is made **mandatory** and is deliberately missing.
 - **Cahaya Facility Services:** the Business Registration Record is made **optional**, so its absence is not a problem.
 
+## Where the PDFs are
+
+All 20 PDFs are in the `test-pdfs` folder at the top of the project, organised for people; see `test-pdfs/README.md`.
+
 ## Load it into the app
 
-1. Upload the `dataset/pdfs` folder to Google Drive. Open it and copy its ID: the part of the address after `/folders/`.
-2. In Apps Script, add the files `M1_DemoDatasetData` and `M1_DemoDataset` (both in `app/`). Under **Project Settings → Script properties**, add `DATASET_FOLDER_ID` with that ID.
-3. Run `M1_importDemoDataset`. It registers the 7 suppliers that aren't part of the live demo through the real Member 1 functions, uploads their documents, and fills the GroundTruth tab. Running it again skips anything already imported.
+1. Upload the whole `test-pdfs` folder to Google Drive (drag it into My Drive). Keep its name.
+2. In Apps Script, run `M1_importDemoDataset`. It finds the folder by name and reads every sub-folder, registers the 7 suppliers that aren't part of the live demo through the real Member 1 functions, uploads their documents, and fills the GroundTruth tab. Running it again skips anything already imported.
+3. Only if Drive has more than one folder called `test-pdfs`: add a script property `DATASET_FOLDER_ID` with the ID of the right one (the part of its address after `/folders/`).
 
 ## Live demo: BrightClean (spec section 13)
 
-Register BrightClean on stage instead of importing it:
+Register BrightClean on stage instead of importing it. Its PDFs and the details to type are in `test-pdfs/2. Video demo - BrightClean (you upload these)`.
 
 1. **Add existing supplier** with these details, and choose **Cleaning Services**:
    - Company name: BrightClean Sdn. Bhd.
@@ -75,9 +79,9 @@ Register BrightClean on stage instead of importing it:
    - Internal responsible officer: Farid Hassan (Procurement)
    - Criticality: MEDIUM
    - Procurement reference: PR-2025-014
-2. **Upload** `BrightClean_Cleaning_Service_Agreement_2026.pdf` and `BrightClean_Insurance_Certificate_2025-2026.pdf`. Leave the Business Registration Record empty: that is the *missing mandatory document*.
+2. **Upload** the two PDFs in `Step 1 - upload these 2 while registering`: `BrightClean_Cleaning_Service_Agreement_2026.pdf` and `BrightClean_Insurance_Certificate_2025-2026.pdf`. Leave the Business Registration Record empty: that is the *missing mandatory document*.
 3. **Register.** The status becomes *Pending documents*.
-4. **Show the renewal.** Open the supplier, then use **Upload renewed version** on the Insurance Certificate with `BrightClean_Insurance_Certificate_2026-2027_RENEWAL.pdf`. Version 1 is kept in the history as replaced.
+4. **Show the renewal.** Open the supplier, then use **Upload renewed version** on the Insurance Certificate with `BrightClean_Insurance_Certificate_2026-2027_RENEWAL.pdf` from `Step 2 - upload this later as the renewal`. Version 1 is kept in the history as replaced.
 
 To import BrightClean too (for example, for testing), run `M1_importDemoDatasetWithBrightClean` instead. It still leaves the renewal PDF for you to upload by hand.
 

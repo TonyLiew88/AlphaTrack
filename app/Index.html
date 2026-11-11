@@ -4,102 +4,79 @@
   <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Silent Expiry Guardian · Alpha Electronics</title>
+  <title>AlphaTrack · Alpha Electronics Sdn. Bhd.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&display=swap" rel="stylesheet">
   <?!= include('Styles'); ?>
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar" aria-label="Main navigation">
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <div class="brand">
-        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#93A9F5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
-        <div><div class="brand-name">Silent Expiry Guardian</div><div class="brand-sub">Supplier compliance monitoring</div></div>
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L12 4l8 16"/><path d="M7.5 14h9"/></svg>
+        </span>
+        <div>
+          <div class="brand-name">AlphaTrack</div>
+          <div class="brand-tag">Stay ahead of every supplier expiry</div>
+        </div>
+        <button type="button" class="btn btn-icon side-close" id="side-close" aria-label="Close menu"><span data-icon="x"></span></button>
       </div>
       <nav class="nav">
-        <button type="button" class="nav-item" data-page="overview">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
-          <span class="nav-label">Overview</span><span class="nav-owner">M5</span>
+        <div class="nav-group">Monitor</div>
+        <button type="button" class="nav-item" data-page="overview" data-crumb="Overview">
+          <span data-icon="dashboard"></span><span class="nav-label">Overview</span><span class="nav-owner">M5</span>
         </button>
-        <button type="button" class="nav-item" data-page="suppliers">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V8l6-4 6 4v13"/><path d="M15 21V11h6v10"/><path d="M7 12h4M7 16h4"/></svg>
-          <span class="nav-label">Supplier &amp; Document Management</span><span class="nav-owner">M1</span>
+        <div class="nav-group">Manage</div>
+        <button type="button" class="nav-item" data-page="suppliers" data-crumb="Suppliers &amp; Documents">
+          <span data-icon="building"></span><span class="nav-label">Suppliers &amp; Documents</span><span class="nav-owner">M1</span>
         </button>
-        <button type="button" class="nav-item" data-page="ai">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>
-          <span class="nav-label">AI Document Analysis</span><span class="nav-owner">M2</span>
+        <div class="nav-group">Intelligence</div>
+        <button type="button" class="nav-item" data-page="ai" data-crumb="AI Document Analysis">
+          <span data-icon="sparkles"></span><span class="nav-label">AI Document Analysis</span><span class="nav-owner">M2</span>
         </button>
-        <button type="button" class="nav-item" data-page="risk">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-          <span class="nav-label">Expiry &amp; Risk Analysis</span><span class="nav-owner">M3</span>
+        <button type="button" class="nav-item" data-page="risk" data-crumb="Expiry &amp; Risk">
+          <span data-icon="clock"></span><span class="nav-label">Expiry &amp; Risk</span><span class="nav-owner">M3</span>
         </button>
-        <button type="button" class="nav-item" data-page="notifications">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/></svg>
-          <span class="nav-label">Notifications &amp; Renewals</span><span class="nav-owner">M4</span>
+        <button type="button" class="nav-item" data-page="notifications" data-crumb="Notifications &amp; Renewals">
+          <span data-icon="mail"></span><span class="nav-label">Notifications &amp; Renewals</span><span class="nav-owner">M4</span>
         </button>
       </nav>
-      <div class="sidebar-foot">
-        <span id="user-email">Signed in</span>
-        <a id="sheet-link" href="#" target="_blank" rel="noopener" hidden>Open the database (Google Sheet)</a>
+      <div class="side-foot">
+        <a class="side-link" id="sheet-link" href="#" target="_blank" rel="noopener" hidden><span data-icon="database"></span>Open the database</a>
+        <div class="user-card">
+          <span class="avatar side" id="user-avatar" aria-hidden="true">AE</span>
+          <div class="user-meta"><div class="user-name" id="user-email">Signed in</div><div class="user-role">Alpha Electronics · Demo account</div></div>
+        </div>
       </div>
     </aside>
+    <div class="scrim" id="scrim"></div>
 
     <div class="main">
       <header class="topbar">
-        <div class="topbar-left">
-          <span class="company">Alpha Electronics Sdn. Bhd.</span>
-          <span class="chip chip-neutral">Prototype</span>
-        </div>
-        <span class="topbar-meta" id="today-label"></span>
+        <button type="button" class="btn btn-secondary btn-icon menu-btn" id="menu-btn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false"><span data-icon="menu"></span></button>
+        <div class="crumbs"><span class="crumb-root">Alpha Electronics</span><span data-icon="chevronRight" data-size="14" aria-hidden="true"></span><strong id="crumb-current">Overview</strong></div>
+        <span class="topbar-spacer"></span>
+        <form class="search" id="global-search" role="search">
+          <span data-icon="search" data-size="16"></span>
+          <label class="visually-hidden" for="global-search-input">Search suppliers</label>
+          <input id="global-search-input" type="search" placeholder="Search suppliers, IDs, registration no." autocomplete="off">
+        </form>
+        <span class="date-pill" id="today-label"><span data-icon="calendar" data-size="15"></span><span>Today</span></span>
       </header>
       <div id="app-banner" class="banner warn" role="alert" hidden></div>
 
-      <main class="content" id="content">
-        <section class="page" id="page-overview" hidden aria-labelledby="overview-title">
-          <div class="page-head"><div><h1 class="page-title" id="overview-title">Overview</h1>
-            <p class="page-sub">Monitored suppliers, contracts ending soon, expiring certificates, missing documents, high-risk suppliers, pending notifications and the last monitoring run.</p></div></div>
-          <div class="card placeholder">
-            <span class="chip chip-neutral">Owner: Member 5</span>
-            <h2>Not built yet</h2>
-            <p class="muted">This page will summarise every other page. Supplier &amp; Document Management already records the data it needs.</p>
-            <button type="button" class="btn btn-secondary" data-goto="suppliers">Go to Supplier &amp; Document Management</button>
-          </div>
-        </section>
+      <main class="content" id="content" tabindex="-1">
+        <section class="page" id="page-overview" hidden aria-label="Overview"></section>
 
-        <section class="page" id="page-suppliers" hidden aria-label="Supplier and Document Management">
+        <section class="page" id="page-suppliers" hidden aria-label="Suppliers and Documents">
           <?!= include('M1_Page'); ?>
         </section>
 
-        <section class="page" id="page-ai" hidden aria-labelledby="ai-title">
-          <div class="page-head"><div><h1 class="page-title" id="ai-title">AI Document Analysis</h1>
-            <p class="page-sub">Gemini reads each uploaded PDF, extracts names, numbers and dates, and flags mismatches for review.</p></div></div>
-          <div class="card placeholder">
-            <span class="chip chip-neutral">Owner: Member 2</span>
-            <h2>Not built yet</h2>
-            <p class="muted">Every document uploaded in Supplier &amp; Document Management is already queued for this page. Member 2 reads the queue with <code>M1_getDocumentsAwaitingExtraction()</code>, so nobody uploads a PDF twice.</p>
-          </div>
-        </section>
-
-        <section class="page" id="page-risk" hidden aria-labelledby="risk-title">
-          <div class="page-head"><div><h1 class="page-title" id="risk-title">Expiry &amp; Risk Analysis</h1>
-            <p class="page-sub">Contract end dates and certificate expiries, missing documents and risk levels.</p></div></div>
-          <div class="card placeholder">
-            <span class="chip chip-neutral">Owner: Member 3</span>
-            <h2>Not built yet</h2>
-            <p class="muted">Missing-document checks will use each supplier's checklist from <code>M1_getSupplierRequirements()</code>.</p>
-          </div>
-        </section>
-
-        <section class="page" id="page-notifications" hidden aria-labelledby="notif-title">
-          <div class="page-head"><div><h1 class="page-title" id="notif-title">Notifications &amp; Renewals</h1>
-            <p class="page-sub">Reminder drafts, approvals, sent history and open renewal cases.</p></div></div>
-          <div class="card placeholder">
-            <span class="chip chip-neutral">Owner: Member 4</span>
-            <h2>Not built yet</h2>
-            <p class="muted">Supplier contacts and internal officers come from <code>M1_getSupplier()</code>.</p>
-          </div>
-        </section>
+        <section class="page" id="page-ai" hidden aria-label="AI Document Analysis"></section>
+        <section class="page" id="page-risk" hidden aria-label="Expiry and Risk"></section>
+        <section class="page" id="page-notifications" hidden aria-label="Notifications and Renewals"></section>
       </main>
     </div>
   </div>
@@ -108,6 +85,7 @@
   <div id="modal-root"></div>
 
   <?!= include('AppClient'); ?>
+  <?!= include('OverviewClient'); ?>
   <?!= include('M1_Client'); ?>
 </body>
 </html>

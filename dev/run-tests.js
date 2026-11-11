@@ -39,12 +39,12 @@ const expectThrow = (code, pattern) => {
 };
 
 step('Client scripts compile', () => {
-  ['AppClient.html', 'M1_Client.html'].forEach((f) => {
+  ['AppClient.html', 'OverviewClient.html', 'M1_Client.html'].forEach((f) => {
     const html = fs.readFileSync(path.join(appDir, f), 'utf8');
     const code = html.replace(/^[\s\S]*?<script>/, '').replace(/<\/script>[\s\S]*$/, '');
     new vm.Script(code, { filename: f });
   });
-  return 'AppClient, M1_Client';
+  return 'AppClient, OverviewClient, M1_Client';
 });
 step('SEG_setupDatabase creates all 13 tabs and seeds master data', () => {
   const s = json('SEG_setupDatabase()');
@@ -224,9 +224,32 @@ dsLoad(path.join(__dirname, 'mock-google.js'), 'mock-google.js');
 fs.readdirSync(appDir).filter((f) => f.endsWith('.gs')).sort().forEach((f) => dsLoad(path.join(appDir, f), f));
 const dsRun = (code) => vm.runInContext(code, ds);
 const dsJson = (code) => JSON.parse(dsRun('JSON.stringify(' + code + ')'));
-const pdfDir = path.resolve(__dirname, '..', 'dataset', 'pdfs');
-ds.__pdfs = fs.readdirSync(pdfDir).filter((f) => f.endsWith('.pdf')).map((f) => ({ name: f, b64: fs.readFileSync(path.join(pdfDir, f)).toString('base64') }));
+// Every PDF under test-pdfs, with the sub-folder it sits in, so the mock Drive gets the same tree.
+const pdfRoot = path.resolve(__dirname, '..', 'test-pdfs');
+const walkPdfs = (dir, rel) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+  const relPath = rel ? rel + '/' + e.name : e.name;
+  if (e.isDirectory()) return walkPdfs(path.join(dir, e.name), relPath);
+  return e.name.endsWith('.pdf') ? [{ name: e.name, dir: rel, b64: fs.readFileSync(path.join(dir, e.name)).toString('base64') }] : [];
+});
+ds.__pdfs = walkPdfs(pdfRoot, '');
 
+step('Test PDFs: one folder per supplier, and BrightClean only in the video folder', () => {
+  const truth = dsJson('M1_DATASET.groundTruth');
+  const live = dsJson('M1_DATASET.suppliers.filter(s => s.liveDemo).map(s => s.info.supplierName)');
+  const short = (n) => n.replace(' Sdn. Bhd.', '');
+  const wrong = ds.__pdfs.filter((p) => {
+    const row = truth.find((r) => r.file_name === p.name);
+    if (!row) return true;
+    const top = p.dir.split('/')[0];
+    if (live.indexOf(row.supplier_name) >= 0) return !/^2\. Video demo/.test(top);
+    return !/^1\. Suppliers already in AlphaTrack/.test(top) || p.dir.split('/')[1] !== short(row.supplier_name);
+  }).map((p) => p.dir + '/' + p.name);
+  if (wrong.length) throw new Error('misplaced: ' + wrong.join(', '));
+  const guides = ['README.md', '2. Video demo - BrightClean (you upload these)/READ ME - video steps.txt']
+    .filter((g) => !fs.existsSync(path.join(pdfRoot, g)));
+  if (guides.length) throw new Error('missing guide: ' + guides.join(', '));
+  return new Set(ds.__pdfs.map((p) => p.dir)).size + ' folders, ' + ds.__pdfs.length + ' PDFs';
+});
 step('Dataset: 20 PDFs on disk match the answer key', () => {
   const truth = dsJson('M1_DATASET.groundTruth');
   const files = ds.__pdfs.map((p) => p.name);
@@ -246,8 +269,14 @@ step('Dataset: all 14 spec scenarios are covered', () => {
 });
 step('Dataset: import registers 7 suppliers and leaves BrightClean for the live demo', () => {
   dsRun('SEG_setupDatabase()');
-  dsRun("var __folder = DriveApp.createFolder('dataset'); __pdfs.forEach(function (p) { __folder.createFile(Utilities.newBlob(Utilities.base64Decode(p.b64), 'application/pdf', p.name)); });");
-  const report = dsJson('M1_importDataset(__folder.getId(), {})');
+  // Same as dragging the test-pdfs folder into My Drive: the whole tree, sub-folders included.
+  dsRun(`var __folder = DriveApp.createFolder('test-pdfs');
+    var __dir = function (rel) { var f = __folder; rel.split('/').filter(Boolean).forEach(function (part) {
+      var it = f.getFoldersByName(part); f = it.hasNext() ? it.next() : f.createFolder(part); }); return f; };
+    __pdfs.forEach(function (p) { __dir(p.dir).createFile(Utilities.newBlob(Utilities.base64Decode(p.b64), 'application/pdf', p.name)); });`);
+  const found = dsRun('M1_datasetFolderId()');
+  if (found !== dsRun('__folder.getId()')) throw new Error('M1_datasetFolderId did not find the test-pdfs folder by name');
+  const report = dsJson('M1_importDataset(M1_datasetFolderId(), {})');
   const imported = report.filter((l) => l.indexOf('Imported') === 0).length;
   if (imported !== 7 || !report.some((l) => /Skipped BrightClean/.test(l))) throw new Error(report.join(' / '));
   return report[report.length - 1];
@@ -290,7 +319,7 @@ step('Dataset: running the import again adds nothing', () => {
 });
 step('Dataset: the BrightClean live demo works with its PDFs (register, missing document, renewal)', () => {
   return dsRun(`(function () {
-    const files = {}; const it = __folder.getFiles(); while (it.hasNext()) { const f = it.next(); files[f.getName()] = f; }
+    const files = M1_datasetFiles(__folder, {}, []);
     const b64 = (n) => Utilities.base64Encode(files[n].getBlob().getBytes());
     const s = M1_DATASET.suppliers.find(x => x.key === 'brightclean');
     let d = M1_saveSupplierDraft({ info: s.info, requirements: M1_getCategoryChecklist('CLEANING') });
@@ -307,6 +336,87 @@ step('Dataset: the BrightClean live demo works with its PDFs (register, missing 
     const linked = readTable(SEG.TABS.GROUND_TRUTH).filter(r => r.supplier_name === 'BrightClean Sdn. Bhd.' && r.doc_id).length;
     if (linked !== 3) throw new Error('BrightClean answer-key rows linked: ' + linked + ' / ' + report.join(' / '));
     return id + ' registered live, renewal is version 2, ' + linked + ' answer-key rows linked';
+  })()`);
+});
+
+step('Overview: dashboard numbers match the Sheet', () => {
+  const o = dsJson('SEG_getOverview()');
+  const sups = dsJson('readTable(SEG.TABS.SUPPLIERS)');
+  const docs = dsJson('readTable(SEG.TABS.DOCUMENTS)');
+  const current = docs.filter((d) => d.lifecycle_status === 'ACTIVE').length;
+  const statusSum = Object.keys(o.suppliers.byStatus).reduce((n, k) => n + o.suppliers.byStatus[k], 0);
+  if (o.suppliers.total !== sups.length || statusSum !== sups.length) throw new Error('suppliers ' + o.suppliers.total + ' vs ' + sups.length + ', status sum ' + statusSum);
+  if (o.documents.current !== current || o.documents.versions !== docs.length) throw new Error('documents ' + JSON.stringify(o.documents));
+  if (o.coverage.uploaded > o.coverage.required || !o.activity.length || o.attention.length > 6) throw new Error(JSON.stringify({ coverage: o.coverage, activity: o.activity.length, attention: o.attention.length }));
+  return o.suppliers.total + ' suppliers, ' + current + ' current documents, ' + o.coverage.uploaded + ' of ' + o.coverage.required + ' mandatory on file, ' + o.attentionTotal + ' need attention';
+});
+step('Deactivate: monitoring stops, nothing is deleted, the Drive folder moves, and it can be undone', () => {
+  return dsRun(`(function () {
+    const s = readTable(SEG.TABS.SUPPLIERS).find(r => r.supplier_name.indexOf('Perisai') === 0);
+    const id = s.supplier_id;
+    const root = SEG_rootFolder();
+    const docsBefore = readTable(SEG.TABS.DOCUMENTS).filter(d => d.supplier_id === id).length;
+    const queueBefore = M1_getDocumentsAwaitingExtraction().filter(d => d.supplierId === id).length;
+    const overviewBefore = SEG_getOverview();
+    let threw = '';
+    try { M1_deactivateSupplier(id, 'no'); } catch (e) { threw = e.message; }
+    if (!/reason/.test(threw)) throw new Error('a too-short reason was accepted: ' + threw);
+
+    let d = M1_deactivateSupplier(id, 'Contract ended on 31 Oct 2026');
+    if (!d.supplier.deactivated || d.supplier.accountStatus !== 'DEACTIVATED' || d.supplier.deactivationReason !== 'Contract ended on 31 Oct 2026') {
+      throw new Error('detail after deactivate: ' + JSON.stringify(d.supplier));
+    }
+    const archive = root.getFoldersByName('Deactivated suppliers').next();
+    if (!archive.children.some(c => c.getId() === s.drive_folder_id)) throw new Error('folder not moved into "Deactivated suppliers"');
+    if (root.children.some(c => c.getId() === s.drive_folder_id)) throw new Error('folder still in the main folder');
+    if (readTable(SEG.TABS.DOCUMENTS).filter(x => x.supplier_id === id).length !== docsBefore) throw new Error('documents changed');
+    if (M1_getDocumentsAwaitingExtraction().some(x => x.supplierId === id)) throw new Error('still in the AI extraction queue');
+    if (M1_getMonitoredSuppliers().some(x => x.supplierId === id) || M1_isMonitored(id)) throw new Error('still monitored');
+    const o = SEG_getOverview();
+    if (o.suppliers.total !== overviewBefore.suppliers.total - 1 || o.suppliers.deactivated !== 1) throw new Error('overview: ' + JSON.stringify(o.suppliers));
+    if (o.documents.awaitingExtraction !== overviewBefore.documents.awaitingExtraction - queueBefore) throw new Error('overview queue not reduced');
+    const listed = M1_listSuppliers().find(x => x.supplierId === id);
+    if (!listed.deactivated) throw new Error('list does not show it as deactivated');
+
+    const blocked = [];
+    const tryIt = (label, fn) => { try { fn(); blocked.push(label + ' NOT blocked'); } catch (e) { if (!/deactivated/.test(e.message)) blocked.push(label + ': ' + e.message); } };
+    tryIt('edit details', () => M1_updateSupplierInfo(id, Object.assign(M1_rowToInfo(s), { contactPerson: 'Someone Else' })));
+    tryIt('edit checklist', () => M1_saveSupplierRequirements(id, d.requirements.map(r => Object.assign({}, r))));
+    tryIt('upload', () => M1_uploadDocument({ supplierId: id, requirementId: d.requirements[0].requirementId, fileName: 'x.pdf',
+      mimeType: 'application/pdf', base64: Utilities.base64Encode([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x99]) }));
+    tryIt('deactivate twice', () => M1_deactivateSupplier(id, 'Second time round'));
+    if (blocked.length) throw new Error(blocked.join('; '));
+
+    let clash = '';
+    try { M1_saveSupplierDraft({ info: Object.assign(M1_rowToInfo(s), { supplierName: 'Copy of Perisai' }) }); } catch (e) { clash = e.message; }
+    if (!/deactivated\. Reactivate it/.test(clash)) throw new Error('re-registering the same company: ' + clash);
+
+    d = M1_reactivateSupplier(id);
+    if (d.supplier.deactivated || d.supplier.deactivationReason) throw new Error('still deactivated after reactivate');
+    if (!root.children.some(c => c.getId() === s.drive_folder_id)) throw new Error('folder not moved back');
+    if (M1_getDocumentsAwaitingExtraction().filter(x => x.supplierId === id).length !== queueBefore) throw new Error('documents not back in the AI queue');
+    if (!M1_isMonitored(id)) throw new Error('not monitored again');
+    const audit = readTable(SEG.TABS.AUDIT).filter(a => a.supplier_id === id).map(a => a.action);
+    if (audit.indexOf('SUPPLIER_DEACTIVATED') < 0 || audit.indexOf('SUPPLIER_REACTIVATED') < 0) throw new Error('audit: ' + audit.join(','));
+    return id + ' deactivated and reactivated; folder moved both ways; edits and uploads blocked while deactivated';
+  })()`);
+});
+step('Video demo reset removes BrightClean only, so it can be registered again', () => {
+  return dsRun(`(function () {
+    const before = readTable(SEG.TABS.SUPPLIERS).length;
+    const removed = M1_resetVideoDemo();
+    const after = readTable(SEG.TABS.SUPPLIERS);
+    if (removed !== 1 || after.length !== before - 1 || after.some(r => r.registration_no === 'SIM-REG-101')) throw new Error('removed ' + removed);
+    if (readTable(SEG.TABS.DOCUMENTS).some(d => d.original_file_name.indexOf('BrightClean') === 0)) throw new Error('BrightClean documents left');
+    const truth = readTable(SEG.TABS.GROUND_TRUTH).filter(r => r.supplier_name === 'BrightClean Sdn. Bhd.');
+    if (truth.length !== 4 || truth.some(r => r.supplier_id || r.doc_id)) throw new Error('answer key not unlinked');
+    const s = M1_DATASET.suppliers.find(x => x.key === 'brightclean');
+    const d = M1_saveSupplierDraft({ info: s.info, requirements: M1_getCategoryChecklist('CLEANING') });
+    const files = M1_datasetFiles(__folder, {}, []);
+    const req = d.requirements.find(r => r.docTypeId === 'CLEANING_SERVICE_AGREEMENT').requirementId;
+    M1_uploadDocument({ supplierId: d.supplier.supplierId, requirementId: req, fileName: 'BrightClean_Cleaning_Service_Agreement_2026.pdf',
+      mimeType: 'application/pdf', base64: Utilities.base64Encode(files['BrightClean_Cleaning_Service_Agreement_2026.pdf'].getBlob().getBytes()) });
+    return 'registered again as ' + d.supplier.supplierId + ' with the same PDFs';
   })()`);
 });
 

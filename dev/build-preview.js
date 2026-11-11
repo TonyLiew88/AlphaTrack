@@ -77,25 +77,36 @@ const shim = `
 
   try {
     SEG_setupDatabase();
-    // Load the fictional test dataset (dataset/pdfs) exactly as M1_importDemoDataset does in Google.
-    var folder = DriveApp.createFolder('dataset');
+    // Load the fictional test dataset (test-pdfs, sub-folders included) exactly as M1_importDemoDataset does in Google.
+    var folder = DriveApp.createFolder('test-pdfs');
+    var subFolder = function (rel) {
+      var f = folder;
+      rel.split('/').filter(Boolean).forEach(function (part) {
+        var it = f.getFoldersByName(part);
+        f = it.hasNext() ? it.next() : f.createFolder(part);
+      });
+      return f;
+    };
     (window.__DATASET_PDFS || []).forEach(function (p) {
-      folder.createFile(Utilities.newBlob(Utilities.base64Decode(p.b64), 'application/pdf', p.name));
+      subFolder(p.dir || '').createFile(Utilities.newBlob(Utilities.base64Decode(p.b64), 'application/pdf', p.name));
     });
-    M1_importDataset(folder.getId(), {});
+    M1_importDataset(M1_datasetFolderId(), {});
   } catch (err) {
     console.error('Preview setup failed', err);
   }
 })();`;
 
-const pdfDir = path.resolve(__dirname, '..', 'dataset', 'pdfs');
-const pdfs = fs.existsSync(pdfDir)
-  ? fs.readdirSync(pdfDir).filter((f) => f.endsWith('.pdf')).map((f) => ({ name: f, b64: fs.readFileSync(path.join(pdfDir, f)).toString('base64') }))
-  : [];
+const pdfRoot = path.resolve(__dirname, '..', 'test-pdfs');
+const walkPdfs = (dir, rel) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+  const relPath = rel ? rel + '/' + e.name : e.name;
+  if (e.isDirectory()) return walkPdfs(path.join(dir, e.name), relPath);
+  return e.name.endsWith('.pdf') ? [{ name: e.name, dir: rel, b64: fs.readFileSync(path.join(dir, e.name)).toString('base64') }] : [];
+});
+const pdfs = fs.existsSync(pdfRoot) ? walkPdfs(pdfRoot, '') : [];
 
 const devBar = '<div style="background:#FEF3C7;color:#78350F;font:13px/1.4 system-ui,sans-serif;padding:7px 16px;text-align:center;border-bottom:1px solid #F3D9A4">' +
   '<strong>Local preview.</strong> Fake in-memory Sheets and Drive, loaded with the fictional test dataset (7 suppliers). ' +
-  'BrightClean is left for you to register: its PDFs are in dataset/pdfs. Nothing is sent to Google, and everything resets when you reload.</div>';
+  'BrightClean is left for you to register: its PDFs are in test-pdfs/2. Video demo. Nothing is sent to Google, and everything resets when you reload.</div>';
 
 const inject = devBar +
   '\n<script>\n' + read(path.join(__dirname, 'mock-google.js')) + '\n</script>' +

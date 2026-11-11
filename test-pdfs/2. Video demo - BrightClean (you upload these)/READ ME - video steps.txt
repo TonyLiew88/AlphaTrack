@@ -1,0 +1,36 @@
+VIDEO DEMO: REGISTER BRIGHTCLEAN FROM START TO FINISH
+=====================================================
+
+1. Open AlphaTrack > Suppliers & Documents > Add existing supplier.
+
+2. Type these details (step 1 of the form):
+     Supplier company name ........ BrightClean Sdn. Bhd.
+     Company registration number .. SIM-REG-101
+     Supplier contact person ...... Aisyah Rahman
+     Supplier contact email ....... yourteam+brightclean@gmail.com
+     Internal responsible officer . Farid Hassan (Procurement)
+     Procurement approval ref ..... PR-2025-014
+     Goods or services provided ... Factory and office cleaning
+     Supplier criticality ......... Medium
+
+3. Category (step 2): choose Cleaning Services.
+
+4. Checklist (step 3): keep the 3 suggested documents. Click Save checklist and continue.
+
+5. Upload (step 4): use the PDFs in the folder "Step 1 - upload these 2 while registering":
+     - BrightClean_Cleaning_Service_Agreement_2026.pdf
+     - BrightClean_Insurance_Certificate_2025-2026.pdf
+   Leave "Business Registration Record" empty ON PURPOSE. It shows a missing mandatory document.
+
+6. Review and submit (step 5): click Register supplier.
+   The status becomes "Pending documents", because one mandatory document is missing.
+
+7. Show the renewal: open BrightClean, find Insurance Certificate, click Upload renewed version,
+   and choose the PDF in the folder "Step 2 - upload this later as the renewal":
+     - BrightClean_Insurance_Certificate_2026-2027_RENEWAL.pdf
+   Version 2 becomes current. Version 1 stays in Version history as "replaced". Nothing is deleted.
+
+Good to know
+  - The import and the local preview always leave BrightClean out, so you can do this live.
+  - If BrightClean is already registered, AlphaTrack says the registration number is taken.
+    Deactivating it does not free the number; use a fresh copy of the app (or the local preview) to record again.

@@ -40,7 +40,8 @@ const M1_DRIVE_FOLDERS = {
   CONTRACT: '1. Contracts & Agreements',
   LICENCE: '2. Licences & Permits',
   CERTIFICATE: '3. Certificates & Insurance',
-  OLD_VERSIONS: 'Old versions'
+  OLD_VERSIONS: 'Old versions',
+  DEACTIVATED: 'Deactivated suppliers'      // in the main folder; holds the folders of deactivated suppliers
 };
 
 /* ------------------------------------------------------------ Master data */
@@ -224,7 +225,10 @@ function M1_validateInfo(input, mode, master, suppliers, selfId) {
   if (info.registrationNo) {
     const mine = SEG_cleanText(info.registrationNo);
     const clash = (suppliers || []).find((s) => String(s.supplier_id) !== String(selfId || '') && SEG_cleanText(s.registration_no) === mine);
-    if (clash) errors.registrationNo = 'Already registered as ' + clash.supplier_id + ' (' + clash.supplier_name + ').';
+    if (clash) {
+      errors.registrationNo = 'Already registered as ' + clash.supplier_id + ' (' + clash.supplier_name + ')' +
+        (M1_isDeactivated(clash) ? ', which is deactivated. Reactivate it instead of registering it again.' : '.');
+    }
   }
   return { info: info, errors: errors, ok: Object.keys(errors).length === 0 };
 }
@@ -389,8 +393,12 @@ function M1_listSuppliers() {
         registrationStatus: s.registration_status || reg.status,
         mandatoryTotal: reg.mandatoryTotal,
         mandatoryUploaded: reg.mandatoryUploaded,
+        missing: reg.missing,
         activeDocuments: myDocs.filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE).length,
         internalOfficer: s.internal_officer,
+        accountStatus: M1_isDeactivated(s) ? SEG.ACCOUNT_STATUS.DEACTIVATED : SEG.ACCOUNT_STATUS.ACTIVE,
+        deactivated: M1_isDeactivated(s),
+        deactivatedAt: s.deactivated_at || '',
         updatedAt: s.updated_at
       };
     })
@@ -439,7 +447,12 @@ function M1_getSupplierDetail(supplierId) {
       submittedAt: supplier.submitted_at,
       createdAt: supplier.created_at,
       updatedAt: supplier.updated_at,
-      driveFolderUrl: supplier.drive_folder_id ? 'https://drive.google.com/drive/folders/' + supplier.drive_folder_id : ''
+      driveFolderUrl: supplier.drive_folder_id ? 'https://drive.google.com/drive/folders/' + supplier.drive_folder_id : '',
+      accountStatus: M1_isDeactivated(supplier) ? SEG.ACCOUNT_STATUS.DEACTIVATED : SEG.ACCOUNT_STATUS.ACTIVE,
+      deactivated: M1_isDeactivated(supplier),
+      deactivatedAt: supplier.deactivated_at || '',
+      deactivatedBy: supplier.deactivated_by || '',
+      deactivationReason: supplier.deactivation_reason || ''
     }),
     registration: reg,
     requirements: requirements,
@@ -463,6 +476,7 @@ function M1_saveSupplierDraft(payload) {
     const wantedId = payload && payload.supplierId ? String(payload.supplierId) : '';
     const row = wantedId ? suppliers.find((s) => s.supplier_id === wantedId) : null;
     if (wantedId && !row) throw new Error('Supplier ' + wantedId + ' was not found.');
+    if (row) M1_assertNotDeactivated(row);
     const submitted = !!(row && row.submitted_at);
     const info = M1_assertValid(M1_validateInfo(payload && payload.info, submitted ? 'submit' : 'draft', master, suppliers, wantedId));
     const requirements = payload && Array.isArray(payload.requirements) ? M1_normaliseRequirements(payload.requirements, master) : null;
@@ -502,6 +516,7 @@ function M1_saveSupplierDraft(payload) {
 function M1_registerSupplier(supplierId) {
   const master = M1_loadMasterData();
   const supplier = M1_findSupplierRow(supplierId);
+  M1_assertNotDeactivated(supplier);
   M1_assertValid(M1_validateInfo(M1_rowToInfo(supplier), 'submit', master, readTable(SEG.TABS.SUPPLIERS), supplierId));
   const hasMandatory = readTable(SEG.TABS.SUPPLIER_REQS)
     .some((r) => r.supplier_id === supplierId && SEG_bool(r.active, true) && SEG_bool(r.mandatory, false));
@@ -524,6 +539,7 @@ function M1_updateSupplierInfo(supplierId, input) {
     const suppliers = readTable(SEG.TABS.SUPPLIERS);
     const row = suppliers.find((s) => s.supplier_id === supplierId);
     if (!row) throw new Error('Supplier ' + supplierId + ' was not found.');
+    M1_assertNotDeactivated(row);
     const info = M1_assertValid(M1_validateInfo(input, row.submitted_at ? 'submit' : 'draft', master, suppliers, supplierId));
     const before = M1_rowToInfo(row);
     const fields = Object.keys(info).filter((k) => String(before[k] || '') !== String(info[k] || ''));
@@ -543,6 +559,7 @@ function M1_updateSupplierInfo(supplierId, input) {
 function M1_saveSupplierRequirements(supplierId, list) {
   const master = M1_loadMasterData();
   const supplier = M1_findSupplierRow(supplierId);
+  M1_assertNotDeactivated(supplier);
   const requirements = M1_normaliseRequirements(list, master);
   if (supplier.submitted_at && !requirements.some((r) => r.mandatory)) {
     throw new Error('A registered supplier needs at least one mandatory document.');
@@ -589,6 +606,7 @@ function M1_uploadDocument(upload) {
 
     result = SEG_withLock(() => {
       const supplier = M1_findSupplierRow(u.supplierId);
+      M1_assertNotDeactivated(supplier);
       const req = readTable(SEG.TABS.SUPPLIER_REQS).find((r) =>
         r.requirement_id === u.requirementId && r.supplier_id === u.supplierId && SEG_bool(r.active, true));
       if (!req) throw new Error('That document is no longer on this supplier’s checklist. Refresh the page and try again.');
@@ -667,11 +685,112 @@ function M1_uploadDocument(upload) {
   return { docId: result.docId, version: result.version, replaced: result.replaced, fileUrl: result.fileUrl, extraction: extraction };
 }
 
+/* ---------------------------------------------- Deactivate and reactivate */
+
+/**
+ * Stops AlphaTrack looking after a supplier, for example when the contract has ended.
+ * Nothing is deleted: the supplier, its checklist, every document version and the audit
+ * trail stay. Its Drive folder moves into "Deactivated suppliers" so the main folder only
+ * shows suppliers that are monitored. Members 2-4 skip deactivated suppliers.
+ */
+function M1_deactivateSupplier(supplierId, reason) {
+  const why = String(reason === undefined || reason === null ? '' : reason).replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (why.length < 5) throw new Error('Please give a reason of at least 5 characters, for example "Contract ended on 31 Oct 2026".');
+  const user = SEG_currentUser();
+  const done = SEG_withLock(() => {
+    const row = M1_findSupplierRow(supplierId);
+    if (M1_isDeactivated(row)) throw new Error(row.supplier_name + ' (' + row.supplier_id + ') is already deactivated.');
+    const now = SEG_now();
+    updateRow(SEG.TABS.SUPPLIERS, row._row, {
+      account_status: SEG.ACCOUNT_STATUS.DEACTIVATED, deactivated_at: now, deactivated_by: user, deactivation_reason: why, updated_at: now
+    });
+    return { name: row.supplier_name, folder: M1_fileSupplierFolder(row, true) };
+  });
+  SEG_audit({
+    module: 'M1', action: 'SUPPLIER_DEACTIVATED', recordType: 'SUPPLIER', recordId: supplierId, supplierId: supplierId,
+    outcome: SEG.ACCOUNT_STATUS.DEACTIVATED, reason: why, details: { driveFolder: done.folder }
+  });
+  return M1_getSupplierDetail(supplierId);
+}
+
+/** Puts a deactivated supplier back under monitoring. */
+function M1_reactivateSupplier(supplierId) {
+  const done = SEG_withLock(() => {
+    const row = M1_findSupplierRow(supplierId);
+    if (!M1_isDeactivated(row)) throw new Error(row.supplier_name + ' (' + row.supplier_id + ') is not deactivated.');
+    const was = 'It was deactivated on ' + (row.deactivated_at || 'an unknown date') + ' by ' + (row.deactivated_by || 'unknown') +
+      ': ' + (row.deactivation_reason || 'no reason given') + '.';
+    updateRow(SEG.TABS.SUPPLIERS, row._row, {
+      account_status: SEG.ACCOUNT_STATUS.ACTIVE, deactivated_at: '', deactivated_by: '', deactivation_reason: '', updated_at: SEG_now()
+    });
+    return { was: was, submitted: !!row.submitted_at, folder: M1_fileSupplierFolder(row, false) };
+  });
+  SEG_audit({
+    module: 'M1', action: 'SUPPLIER_REACTIVATED', recordType: 'SUPPLIER', recordId: supplierId, supplierId: supplierId,
+    outcome: SEG.ACCOUNT_STATUS.ACTIVE, reason: 'Monitoring resumed. ' + done.was, details: { driveFolder: done.folder }
+  });
+  if (done.submitted) M1_refreshRegistrationStatus(supplierId);
+  return M1_getSupplierDetail(supplierId);
+}
+
+function M1_isDeactivated(row) {
+  return String((row && row.account_status) || '').toUpperCase() === SEG.ACCOUNT_STATUS.DEACTIVATED;
+}
+
+function M1_assertNotDeactivated(row) {
+  if (M1_isDeactivated(row)) {
+    throw new Error(row.supplier_name + ' (' + row.supplier_id + ') is deactivated, so it can’t be changed. Reactivate it first.');
+  }
+}
+
+/**
+ * Moves a supplier's Drive folder between the main folder and "Deactivated suppliers".
+ * Only moves it from where the app put it, so a folder someone filed elsewhere is left alone.
+ * Never throws: the status change matters more than the folder, and the result is logged.
+ */
+function M1_fileSupplierFolder(row, deactivated) {
+  if (!row.drive_folder_id) return 'No Drive folder yet.';
+  try {
+    const folder = DriveApp.getFolderById(row.drive_folder_id);
+    const root = SEG_rootFolder();
+    const archive = M1_childFolder(root, M1_DRIVE_FOLDERS.DEACTIVATED);
+    const from = deactivated ? root : archive;
+    const to = deactivated ? archive : root;
+    const parents = folder.getParents();
+    let isInFrom = false;
+    while (parents.hasNext()) {
+      if (parents.next().getId() === from.getId()) isInFrom = true;
+    }
+    if (!isInFrom) return 'Left where it is: it is not in "' + (deactivated ? SEG.ROOT_FOLDER_NAME : M1_DRIVE_FOLDERS.DEACTIVATED) + '".';
+    folder.moveTo(to);
+    return deactivated ? 'Moved into "' + M1_DRIVE_FOLDERS.DEACTIVATED + '".' : 'Moved back into "' + SEG.ROOT_FOLDER_NAME + '".';
+  } catch (err) {
+    console.warn('Could not move the Drive folder of ' + row.supplier_id + ': ' + err.message);
+    return 'Not moved: ' + err.message;
+  }
+}
+
 /* ------------------------------------------------- Hand-off to other modules */
 
+/**
+ * True when Members 2-4 should look after this supplier: registration submitted and not deactivated.
+ * Pass a supplier ID or a row from the Suppliers tab.
+ */
+function M1_isMonitored(supplierOrId) {
+  const row = typeof supplierOrId === 'object' && supplierOrId ? supplierOrId : M1_findSupplierRow(supplierOrId);
+  return !!row.submitted_at && !M1_isDeactivated(row);
+}
+
+/** Every supplier Members 3 and 4 should check, in the shared contract's shape. */
+function M1_getMonitoredSuppliers() {
+  return readTable(SEG.TABS.SUPPLIERS)
+    .filter((s) => s.supplier_id && M1_isMonitored(s))
+    .map((s) => M1_getSupplier(s.supplier_id, s));
+}
+
 /** Supplier, in the shared contract's shape. */
-function M1_getSupplier(supplierId) {
-  const s = M1_findSupplierRow(supplierId);
+function M1_getSupplier(supplierId, knownRow) {
+  const s = knownRow || M1_findSupplierRow(supplierId);
   return {
     supplierId: s.supplier_id,
     supplierName: s.supplier_name,
@@ -683,7 +802,9 @@ function M1_getSupplier(supplierId) {
     internalOfficer: s.internal_officer,
     criticality: s.criticality,
     procurementStatus: s.procurement_status,
-    registrationStatus: s.registration_status
+    registrationStatus: s.registration_status,
+    accountStatus: M1_isDeactivated(s) ? SEG.ACCOUNT_STATUS.DEACTIVATED : SEG.ACCOUNT_STATUS.ACTIVE,
+    monitored: M1_isMonitored(s)
   };
 }
 
@@ -704,12 +825,15 @@ function M1_getDocuments(supplierId) {
 
 /**
  * Member 2's work queue: current (ACTIVE) documents whose extraction was requested
- * and that have no successful Extractions row for this exact file yet.
+ * and that have no successful Extractions row for this exact file yet. Documents of
+ * deactivated suppliers are left out; they come back if the supplier is reactivated.
  */
 function M1_getDocumentsAwaitingExtraction() {
   const extractions = M1_readExtractions();
+  const deactivated = {};
+  readTable(SEG.TABS.SUPPLIERS).forEach((s) => { if (M1_isDeactivated(s)) deactivated[s.supplier_id] = true; });
   return readTable(SEG.TABS.DOCUMENTS)
-    .filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE && d.extraction_requested_at)
+    .filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE && d.extraction_requested_at && !deactivated[d.supplier_id])
     .filter((d) => !extractions.some((x) =>
       x.doc_id === d.doc_id && (!x.file_id || x.file_id === d.file_id) && SEG.EXTRACTION_OK.indexOf(x.processing_status) >= 0))
     .map(M1_documentContract);
@@ -1074,10 +1198,18 @@ function test_M1_endToEnd() {
  * Run it by hand from the editor; nothing calls it automatically.
  */
 function M1_removeTestSuppliers() {
-  const isTest = (s) => /^TEST /.test(String(s.supplier_name)) && /^TEST-/.test(String(s.registration_no));
-  const ids = readTable(SEG.TABS.SUPPLIERS).filter(isTest);
+  return M1_removeSuppliersForTesting((s) => /^TEST /.test(String(s.supplier_name)) && /^TEST-/.test(String(s.registration_no)), 'TEST');
+}
+
+/**
+ * TESTING ONLY, run by hand from the editor: removes the matching suppliers' rows (supplier,
+ * checklist, documents, audit) and moves their Drive folders to the bin. The live app never
+ * deletes anything.
+ */
+function M1_removeSuppliersForTesting(matches, label) {
+  const ids = readTable(SEG.TABS.SUPPLIERS).filter(matches);
   if (!ids.length) {
-    console.log('No TEST suppliers found.');
+    console.log('No ' + label + ' suppliers found.');
     return 0;
   }
   const idSet = {};
@@ -1087,14 +1219,16 @@ function M1_removeTestSuppliers() {
       try { DriveApp.getFolderById(s.drive_folder_id).setTrashed(true); } catch (err) { console.warn(err.message); }
     }
   });
-  [SEG.TABS.SUPPLIERS, SEG.TABS.SUPPLIER_REQS, SEG.TABS.DOCUMENTS, SEG.TABS.AUDIT].forEach((tab) => {
-    const sheet = SEG_sheet(tab);
+  // Every tab with a supplier_id column, except the answer key (its rows are fixed test data).
+  Object.keys(SEG.HEADERS).filter((tab) => tab !== SEG.TABS.GROUND_TRUTH && SEG.HEADERS[tab].indexOf('supplier_id') >= 0).forEach((tab) => {
+    const sheet = SEG_spreadsheet().getSheetByName(tab);
+    if (!sheet) return;
     readTable(tab)
       .filter((r) => idSet[r.supplier_id])
       .map((r) => r._row)
       .sort((a, b) => b - a)
       .forEach((row) => sheet.deleteRow(row));
   });
-  console.log('Removed TEST suppliers: ' + Object.keys(idSet).join(', '));
+  console.log('Removed ' + label + ' suppliers: ' + Object.keys(idSet).join(', '));
   return ids.length;
 }

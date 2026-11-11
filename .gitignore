@@ -1,7 +1,8 @@
 # Generated preview (about 2 MB). Rebuild it with: node dev/build-preview.js
 dev/preview.html
 
-# First design, replaced by app/ and dataset/. Kept on this computer only.
+# First design, replaced by app/, test-pdfs/ and dataset/. Kept on this computer only.
+_old-first-design (not used)/
 apps-script/
 sample-data/
 

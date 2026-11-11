@@ -1,0 +1,268 @@
+<script>
+/**
+ * OverviewClient · Owner: Member 5 (integration)
+ * The Overview dashboard, plus the "coming next" screens for the module pages that
+ * Members 2-4 haven't built yet. Every figure comes from SEG_getOverview(): nothing here is made up.
+ */
+(() => {
+  const E = App.esc;
+  const I = App.icon;
+  const byId = (id) => document.getElementById(id);
+
+  // Registration stages, in order. Light to dark blue = further along (validated ordinal ramp).
+  const STAGES = [
+    { id: 'DRAFT', label: 'Draft', color: 'var(--viz-1)', lightInk: true },
+    { id: 'PENDING_DOCUMENTS', label: 'Pending documents', color: 'var(--viz-2)', lightInk: true },
+    { id: 'PENDING_VERIFICATION', label: 'Pending verification', color: 'var(--viz-3)' },
+    { id: 'ACTIVE_MONITORING', label: 'Active monitoring', color: 'var(--viz-4)' }
+  ];
+  const CLASS_NAMES = { CONTRACT: 'Contracts & agreements', LICENCE: 'Licences & permits', CERTIFICATE: 'Certificates & insurance' };
+  const ACTIVITY = {
+    SUPPLIER_DRAFT_CREATED: ['Draft created', 'edit', 'tone-neutral'],
+    SUPPLIER_DRAFT_SAVED: ['Draft saved', 'edit', 'tone-neutral'],
+    SUPPLIER_REGISTERED: ['Supplier registered', 'checkCircle', 'tone-ok'],
+    SUPPLIER_UPDATED: ['Details updated', 'edit', 'tone-neutral'],
+    REQUIREMENTS_UPDATED: ['Document checklist updated', 'list', 'tone-neutral'],
+    DOCUMENT_UPLOADED: ['Document uploaded', 'upload', 'tone-info'],
+    DOCUMENT_REPLACED: ['Renewed document uploaded', 'refresh', 'tone-brand'],
+    UPLOAD_REJECTED: ['Upload refused', 'xCircle', 'tone-danger'],
+    REGISTRATION_STATUS_CHANGED: ['Registration status changed', 'flag', 'tone-warn'],
+    DATASET_IMPORTED: ['Test dataset imported', 'database', 'tone-neutral'],
+    DATABASE_SETUP: ['Database set up', 'cog', 'tone-neutral'],
+    DRIVE_FOLDER_RESTORED: ['Drive folder restored from the bin', 'folder', 'tone-warn'],
+    SUPPLIER_DEACTIVATED: ['Supplier deactivated', 'xCircle', 'tone-neutral'],
+    SUPPLIER_REACTIVATED: ['Supplier reactivated', 'refresh', 'tone-ok']
+  };
+  App.activity = (action) => ACTIVITY[action] || [String(action || 'Activity').replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase()), 'info', 'tone-neutral'];
+
+  const MODULES = {
+    ai: {
+      owner: 'Member 2', eyebrow: 'Intelligence', title: 'AI Document Analysis', icon: 'sparkles', flag: 'extraction',
+      headline: 'Gemini reads every uploaded document',
+      text: 'Each PDF uploaded in Suppliers & Documents is already queued here. Nobody uploads anything twice.',
+      points: ['Extracts holder name, document number, issuing body and dates', 'Checks them against the supplier register: name mismatch, missing expiry, unreadable scans',
+        'Lets an officer review and correct any field, with every correction logged'],
+      stat: (d) => [d.documents.awaitingExtraction, 'documents ready for AI extraction']
+    },
+    risk: {
+      owner: 'Member 3', eyebrow: 'Intelligence', title: 'Expiry & Risk Analysis', icon: 'clock', flag: 'assessment',
+      headline: 'Every expiry and contract end date, assessed every day',
+      text: 'Uses the dates the AI extracts and each supplier’s checklist to show what is ending, expiring or missing.',
+      points: ['Contracts: active, ending soon, ended or with no fixed end date', 'Licences and certificates: valid, expiring soon, expired, missing or needs review',
+        'Risk level from supplier criticality, document type and days remaining'],
+      stat: (d) => [d.suppliers.submitted, 'registered suppliers to monitor']
+    },
+    notifications: {
+      owner: 'Member 4', eyebrow: 'Intelligence', title: 'Notifications & Renewals', icon: 'mail', flag: 'notifications',
+      headline: 'Renewal reminders, approved before they’re sent',
+      text: 'Turns each issue into the right email, for the right person, and follows up until it is resolved.',
+      points: ['Drafts reminders, follow-ups and escalations', 'Every external email waits for an officer’s approval', 'Never sends the same reminder twice'],
+      stat: (d) => [d.suppliers.submitted, 'registered suppliers it can contact']
+    }
+  };
+
+  let data = null;
+
+  App.registerPage('overview', { show: () => load() });
+  Object.keys(MODULES).forEach((id) => App.registerPage(id, { show: () => showModule(id) }));
+
+  async function fetchOverview() {
+    data = await App.api('SEG_getOverview');
+    return data;
+  }
+
+  async function load() {
+    const root = byId('page-overview');
+    if (!data) root.innerHTML = skeleton();
+    try {
+      await fetchOverview();
+      render();
+    } catch (err) {
+      root.innerHTML = '<div class="card empty enter"><span class="empty-art tone-danger">' + I('xCircle', 28) + '</span><h3>Couldn’t load the overview</h3><p>' +
+        E(err.message) + '</p><button type="button" class="btn btn-secondary" data-ov="retry">Try again</button></div>';
+    }
+  }
+
+  function greeting() {
+    const h = new Date().getHours();
+    return h < 12 ? 'Good morning' : (h < 18 ? 'Good afternoon' : 'Good evening');
+  }
+
+  function skeleton() {
+    const box = '<div class="card card-pad"><div class="section-gap"><div class="skeleton" style="width:40%"></div><div class="skeleton" style="height:30px;width:30%"></div><div class="skeleton" style="width:70%"></div></div></div>';
+    return '<div class="page-head"><div><div class="skeleton" style="width:220px;height:26px"></div></div></div><div class="tiles">' + box + box + box + box + '</div>';
+  }
+
+  function tile(i, label, value, foot, iconName, tone) {
+    return '<div class="tile" style="--i:' + i + '"><div class="tile-top"><span class="tile-label">' + E(label) + '</span><span class="tile-icon ' + tone + '">' +
+      I(iconName, 19) + '</span></div><div class="tile-value" data-count="' + value + '">0</div><div class="tile-foot">' + E(foot) + '</div></div>';
+  }
+
+  function render() {
+    const d = data;
+    const missing = Math.max(0, d.coverage.required - d.coverage.uploaded);
+    const root = byId('page-overview');
+    root.innerHTML =
+      '<div class="page-head"><div><div class="eyebrow">Overview</div><h1 class="page-title">' + greeting() + '</h1>' +
+        '<p class="page-sub">Here’s where supplier compliance stands at Alpha Electronics today. Figures update every time a supplier or document changes.</p></div>' +
+        '<div class="head-actions"><button type="button" class="btn btn-secondary" data-ov="refresh">' + I('refresh', 16) + 'Refresh</button>' +
+        '<button type="button" class="btn btn-primary" data-goto="suppliers" data-emit="suppliers:new">' + I('plus', 16) + 'Register supplier</button></div></div>' +
+      '<div class="tiles stagger">' +
+        tile(0, 'Suppliers registered', d.suppliers.submitted, d.suppliers.drafts + (d.suppliers.drafts === 1 ? ' draft' : ' drafts') + ' still in progress' +
+          (d.suppliers.deactivated ? ' · ' + d.suppliers.deactivated + ' deactivated' : ''), 'building', 'tone-brand') +
+        tile(1, 'Documents on file', d.documents.current, d.documents.renewals + (d.documents.renewals === 1 ? ' renewal' : ' renewals') + ' uploaded · ' + d.documents.versions + ' versions kept', 'file', 'tone-info') +
+        tile(2, 'Waiting for AI extraction', d.documents.awaitingExtraction, d.modules.extraction ? 'Being read by AI Document Analysis' : 'Queued until AI Document Analysis connects', 'sparkles', 'tone-neutral') +
+        tile(3, 'Mandatory documents missing', missing, 'Across ' + d.suppliers.submitted + ' registered ' + (d.suppliers.submitted === 1 ? 'supplier' : 'suppliers'), missing ? 'alert' : 'checkCircle', missing ? 'tone-danger' : 'tone-ok') +
+      '</div>' +
+      '<div class="grid-3-1">' +
+        '<div class="section-gap">' + progressCard(d) + categoryCard(d) + activityCard(d) + '</div>' +
+        '<div class="section-gap">' + coverageCard(d, missing) + attentionCard(d) + modulesCard(d) + '</div>' +
+      '</div>';
+    App.countUp(root);
+    root.querySelectorAll('.card').forEach((card, i) => { card.classList.add('enter'); card.style.animationDelay = (120 + i * 60) + 'ms'; });
+  }
+
+  function progressCard(d) {
+    const total = d.suppliers.total;
+    const parts = STAGES.filter((s) => d.suppliers.byStatus[s.id] > 0);
+    const bar = total
+      ? '<div class="seg-bar" role="img" aria-label="' + E(STAGES.map((s) => s.label + ' ' + d.suppliers.byStatus[s.id]).join(', ')) + '">' +
+        parts.map((s, i) => {
+          const n = d.suppliers.byStatus[s.id];
+          const pct = Math.round((n / total) * 100);
+          return '<div class="seg-part' + (s.lightInk ? ' light-ink' : '') + '" style="flex:' + n + ' 1 0;background:' + s.color + ';animation-delay:' + (200 + i * 90) + 'ms" data-tip="' +
+            E(s.label + ': ' + n + ' (' + pct + '%)') + '">' + (pct >= 9 ? n : '') + '</div>';
+        }).join('') + '</div>'
+      : '<div class="empty" style="padding:18px 0"><p>No suppliers yet.</p></div>';
+    const legend = '<div class="legend">' + STAGES.map((s) => '<span class="legend-item"><span class="swatch" style="background:' + s.color + '"></span>' + E(s.label) + '</span>').join('') + '</div>';
+    const table = '<table class="visually-hidden"><caption>Suppliers by registration status</caption><tbody>' +
+      STAGES.map((s) => '<tr><th scope="row">' + E(s.label) + '</th><td>' + d.suppliers.byStatus[s.id] + '</td></tr>').join('') + '</tbody></table>';
+    const links = '<div style="display:flex;flex-wrap:wrap;gap:8px">' + STAGES.filter((s) => d.suppliers.byStatus[s.id] > 0).map((s) =>
+      '<button type="button" class="btn btn-secondary btn-sm" data-goto="suppliers" data-emit="suppliers:status" data-arg="' + s.id + '">' + E(s.label) +
+      ' <span class="chip chip-neutral num">' + d.suppliers.byStatus[s.id] + '</span></button>').join('') + '</div>';
+    return '<section class="card" aria-labelledby="ov-progress"><div class="card-head"><div><h2 class="card-title" id="ov-progress">Registration progress</h2>' +
+      '<p class="card-sub">' + total + ' suppliers, from first draft to active monitoring</p></div></div>' +
+      '<div class="card-body section-gap" style="gap:16px">' + bar + legend + table + links + '</div></section>';
+  }
+
+  function coverageCard(d, missing) {
+    const none = !d.coverage.required;
+    // Never round up to 100% while something is still missing.
+    const raw = none ? 0 : (d.coverage.uploaded / d.coverage.required) * 100;
+    const pct = d.coverage.uploaded < d.coverage.required ? Math.min(99, Math.round(raw)) : Math.round(raw);
+    const maxClass = Math.max(1, ...d.documents.byClass.map((c) => c.count));
+    return '<section class="card" aria-labelledby="ov-coverage"><div class="card-head"><div><h2 class="card-title" id="ov-coverage">Mandatory documents on file</h2>' +
+      '<p class="card-sub">Registered suppliers only</p></div></div><div class="card-body section-gap" style="gap:14px">' +
+      '<div style="display:flex;align-items:baseline;gap:10px"><span class="big-figure" data-count="' + pct + '" data-suffix="%">0%</span>' +
+      '<span class="muted small">' + d.coverage.uploaded + ' of ' + d.coverage.required + ' uploaded</span></div>' +
+      '<div class="meter" role="img" aria-label="' + pct + ' percent of mandatory documents uploaded"><div class="meter-fill" style="width:' + pct + '%"></div></div>' +
+      (none
+        ? '<p class="small muted">No registered suppliers yet, so there is nothing to check.</p>'
+        : '<p class="small ' + (missing ? '' : 'muted') + '" style="display:flex;align-items:center;gap:6px;color:' + (missing ? 'var(--danger)' : 'var(--ok)') + '">' +
+          I(missing ? 'alert' : 'checkCircle', 15) + (missing ? missing + ' mandatory ' + (missing === 1 ? 'document is' : 'documents are') + ' still missing' : 'Every mandatory document is on file') + '</p>') +
+      '<div style="border-top:1px solid var(--border);padding-top:14px"><div class="tile-label" style="margin-bottom:10px">Current documents by type</div><ul class="bars">' +
+      d.documents.byClass.map((c, i) => '<li class="bar-row"><span class="bar-name">' + E(CLASS_NAMES[c.documentClass]) + '</span><span class="bar-track"><span class="bar-fill" style="display:block;width:' +
+        Math.max(1, (c.count / maxClass) * 100) + '%;animation-delay:' + (250 + i * 80) + 'ms" data-tip="' + E(CLASS_NAMES[c.documentClass] + ': ' + c.count) + '"></span></span><span class="bar-val">' + c.count + '</span></li>').join('') +
+      '</ul></div></div></section>';
+  }
+
+  function categoryCard(d) {
+    const max = Math.max(1, ...d.suppliers.byCategory.map((c) => c.count));
+    return '<section class="card" aria-labelledby="ov-category"><div class="card-head"><div><h2 class="card-title" id="ov-category">Suppliers by category</h2>' +
+      '<p class="card-sub">Every registered and draft supplier</p></div></div><div class="card-body"><ul class="bars">' +
+      d.suppliers.byCategory.map((c, i) => '<li class="bar-row"><span class="bar-name">' + E(c.name) + '</span><span class="bar-track">' +
+        (c.count ? '<span class="bar-fill" style="display:block;width:' + (c.count / max) * 100 + '%;animation-delay:' + (200 + i * 70) + 'ms" data-tip="' + E(c.name + ': ' + c.count) + '"></span>' : '') +
+        '</span><span class="bar-val">' + c.count + '</span></li>').join('') +
+      '</ul></div></section>';
+  }
+
+  function attentionCard(d) {
+    const rows = d.attention.map((a) => '<li><button type="button" class="list-row" data-goto="suppliers" data-emit="suppliers:open" data-arg="' + E(a.supplierId) + '">' +
+      '<span class="tile-icon ' + (a.kind === 'DRAFT' ? 'tone-neutral' : 'tone-warn') + '">' + I(a.kind === 'DRAFT' ? 'edit' : 'alert', 17) + '</span>' +
+      '<span class="list-main"><span class="list-title">' + E(a.supplierName) + '</span><br><span class="list-sub">' + E(a.detail) + '</span></span>' +
+      (a.criticality ? '<span class="chip crit-' + E(a.criticality) + '">' + E(a.criticality.charAt(0) + a.criticality.slice(1).toLowerCase()) + '</span>' : '') +
+      '<span class="row-go">' + I('chevronRight', 16) + '</span></button></li>').join('');
+    return '<section class="card" aria-labelledby="ov-attention"><div class="card-head ruled"><div><h2 class="card-title" id="ov-attention">Needs attention</h2>' +
+      '<p class="card-sub">Missing mandatory documents and unfinished registrations</p></div>' +
+      (d.attentionTotal ? '<span class="chip chip-brand num">' + d.attentionTotal + '</span>' : '') + '</div>' +
+      (rows ? '<ul class="list">' + rows + '</ul>'
+        : '<div class="empty"><span class="empty-art tone-ok">' + I('checkCircle', 28) + '</span><h3>All clear</h3><p>Every registered supplier has its mandatory documents.</p></div>') +
+      '</section>';
+  }
+
+  function activityCard(d) {
+    const items = d.activity.map((a) => {
+      const meta = App.activity(a.action);
+      return '<li class="tl-item"><span class="tl-icon ' + meta[2] + '">' + I(meta[1], 16) + '</span><div>' +
+        '<div class="tl-what">' + E(meta[0]) + (a.supplierName ? ' · ' + E(a.supplierName) : '') + '</div>' +
+        (a.reason ? '<div class="tl-why">' + E(a.reason) + '</div>' : '') +
+        '<div class="tl-when">' + E(App.fmtDateTime(a.timestamp)) + ' · ' + E(a.actor) + '</div></div></li>';
+    }).join('');
+    return '<section class="card" aria-labelledby="ov-activity"><div class="card-head ruled"><div><h2 class="card-title" id="ov-activity">Recent activity</h2>' +
+      '<p class="card-sub">From the audit log</p></div></div>' +
+      (items ? '<ol class="timeline">' + items + '</ol>' : '<div class="empty"><p>No activity yet.</p></div>') + '</section>';
+  }
+
+  function modulesCard(d) {
+    const row = (id) => {
+      const m = MODULES[id];
+      const live = d.modules[m.flag];
+      return '<li><button type="button" class="list-row" data-page="' + id + '"><span class="tile-icon tone-brand">' + I(m.icon, 17) + '</span>' +
+        '<span class="list-main"><span class="list-title">' + E(m.title) + '</span><br><span class="list-sub">' + E(m.owner) + '</span></span>' +
+        '<span class="chip ' + (live ? 'st-active' : 'chip-neutral') + '">' + (live ? 'Connected' : 'Not connected yet') + '</span>' +
+        '<span class="row-go">' + I('chevronRight', 16) + '</span></button></li>';
+    };
+    return '<section class="card" aria-labelledby="ov-modules"><div class="card-head ruled"><div><h2 class="card-title" id="ov-modules">Monitoring modules</h2>' +
+      '<p class="card-sub">Expiry, risk and reminder figures appear here as each module connects</p></div></div>' +
+      '<ul class="list">' + ['ai', 'risk', 'notifications'].map(row).join('') + '</ul></section>';
+  }
+
+  async function showModule(id) {
+    const root = byId('page-' + id);
+    // Show what we have at once, then refresh so the "Live" figure is never stale.
+    if (data) renderModule(id, false); else root.innerHTML = skeleton();
+    try {
+      await fetchOverview();
+      renderModule(id, root.querySelector('.module-card') !== null);
+    } catch (err) {
+      if (root.querySelector('.module-card')) { App.toast(err.message, 'error'); return; }
+      root.innerHTML = '<div class="card empty enter"><span class="empty-art tone-danger">' + I('xCircle', 28) + '</span><h3>Couldn’t load the live figures</h3><p>' +
+        E(err.message) + '</p></div>';
+    }
+  }
+
+  /** quiet: update in place without replaying the entrance animation. */
+  function renderModule(id, quiet) {
+    const m = MODULES[id];
+    const root = byId('page-' + id);
+    root.classList.toggle('no-anim', !!quiet);
+    const stat = m.stat(data);
+    const live = data && data.modules[m.flag];
+    root.innerHTML =
+      '<div class="page-head"><div><div class="eyebrow">' + E(m.eyebrow) + ' · ' + E(m.owner) + '</div><h1 class="page-title">' + E(m.title) + '</h1>' +
+        '<p class="page-sub">' + E(m.text) + '</p></div></div>' +
+      '<section class="card module-card enter"><div class="section-gap" style="gap:14px">' +
+        '<span class="chip ' + (live ? 'st-active' : 'chip-neutral') + ' chip-dot' + (live ? '' : ' chip-live') + '" style="align-self:flex-start">' +
+          (live ? 'Connected' : 'Not connected yet: ' + E(m.owner) + ' is building it') + '</span>' +
+        '<div style="display:flex;align-items:center;gap:14px"><span class="tile-icon tone-brand" style="width:48px;height:48px;border-radius:14px">' + I(m.icon, 24) + '</span>' +
+        '<h2 class="step-title">' + E(m.headline) + '</h2></div>' +
+        '<ul class="module-list stagger">' + m.points.map((p, i) => '<li style="--i:' + i + '">' + I('checkCircle', 17) + '<span>' + E(p) + '</span></li>').join('') + '</ul>' +
+      '</div><div class="section-gap" style="gap:12px">' +
+        '<div class="stat-row"><span class="tile-label">Live from Suppliers &amp; Documents</span><span class="big-figure"' + (quiet ? '>' + stat[0] : ' data-count="' + stat[0] + '">0') + '</span>' +
+        '<span class="small muted">' + E(stat[1]) + '</span></div>' +
+        '<button type="button" class="btn btn-secondary" data-goto="suppliers">' + I('building', 16) + 'Open Suppliers &amp; Documents</button>' +
+      '</div></section>';
+    App.countUp(root);
+  }
+
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-ov]');
+    if (!a) return;
+    if (a.dataset.ov === 'refresh') {
+      a.disabled = true;
+      fetchOverview().then(() => { render(); App.toast('Overview refreshed.', 'ok'); }).catch((err) => App.toast(err.message, 'error')).finally(() => { a.disabled = false; });
+    }
+    if (a.dataset.ov === 'retry') load();
+  });
+})();
+</script>
