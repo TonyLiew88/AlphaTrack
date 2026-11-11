@@ -41,7 +41,8 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
    1. In Google Drive, drag the project's whole `test-pdfs` folder into **My Drive**. Keep its name.
    2. Back in Apps Script, run `M1_importDemoDataset`. It finds `test-pdfs` by name, reads every sub-folder, registers 7 fictional suppliers with 17 documents and fills the GroundTruth tab. This takes a minute or two.
    3. BrightClean is left out so you can register it live in the video: follow `test-pdfs/2. Video demo - BrightClean (you upload these)/READ ME - video steps.txt`.
-   4. To record the video again, run `M1_resetVideoDemo`. It removes BrightClean only.
+   4. To record the video again, run `M1_resetVideoDemo`. It removes BrightClean only and gives its number back, so it registers under the same `SUP` number again.
+   5. To start all the demo data again, numbered from `SUP001`, run `M1_restartDemoData` (in `M1_DemoDataset.gs`). It removes the dataset suppliers (BrightClean too) and any TEST supplier, then imports `test-pdfs` again. Suppliers you registered yourself are kept.
 
    Only if Drive has more than one `test-pdfs` folder: add the script property `DATASET_FOLDER_ID` with the right folder's ID.
 8. **Deploy.** Click **Deploy → New deployment**, choose the type **Web app**, keep **Execute as: Me** and **Who has access: Only myself**, then click **Deploy**. Open the web app URL it gives you.
@@ -120,4 +121,6 @@ node dev/build-preview.js
 - **10 MB per file.** Files travel from the browser as text (base64), so 10 MB per file is the practical limit.
 - **Exact duplicates only.** The duplicate check compares exact file contents. A re-scanned copy of the same paper is a different file, so it is accepted.
 - **Links need access.** "View file" opens the file in Google Drive, so it works only for accounts that can see the folder.
-- **Tested in real Google on 11 Nov 2026.** Setup, `M1_runAllTests` and the dataset import ran in the team lead's account. The test supplier used `SUP001`, so the imported suppliers are `SUP002`–`SUP008` (IDs are never reused).
+- **Tested in real Google on 11 Nov 2026.** Setup, `M1_runAllTests` and the dataset import ran in the team lead's account.
+- **ID numbers.** A number that was handed out is never given to a different record, even if its row is deleted by hand. The one exception is test clean-up (`M1_runAllTests`, `M1_resetVideoDemo`, `M1_restartDemoData`): it removes every trace of its test records, so their numbers are free again.
+- **Tidy Sheet.** Every tab's columns fit their text; very long text wraps. This runs after setup and the import. To redo it after many changes, open the Sheet and choose **AlphaTrack → Fit columns to text**.

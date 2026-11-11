@@ -17,6 +17,14 @@ function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
 }
 
+/** Adds an AlphaTrack menu to the Sheet (runs by itself when the Sheet is opened). */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('AlphaTrack')
+    .addItem('Fit columns to text', 'SEG_fitColumns')
+    .addToUi();
+}
+
 /** Basic facts the page needs on load. Called by AppClient. */
 function SEG_getAppInfo() {
   const ss = SEG_spreadsheet();

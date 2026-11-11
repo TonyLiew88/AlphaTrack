@@ -1228,7 +1228,7 @@ function M1_removeTestSuppliers() {
  * checklist, documents, audit) and moves their Drive folders to the bin. The live app never
  * deletes anything.
  */
-function M1_removeSuppliersForTesting(matches, label) {
+function M1_removeSuppliersForTesting(matches, label, fresh) {
   const ids = readTable(SEG.TABS.SUPPLIERS).filter(matches);
   if (!ids.length) {
     console.log('No ' + label + ' suppliers found.');
@@ -1242,14 +1242,16 @@ function M1_removeSuppliersForTesting(matches, label) {
     }
   });
   // Every tab with a supplier_id column, except the answer key (its rows are fixed test data).
-  Object.keys(SEG.HEADERS).filter((tab) => tab !== SEG.TABS.GROUND_TRUTH && SEG.HEADERS[tab].indexOf('supplier_id') >= 0).forEach((tab) => {
-    const sheet = SEG_spreadsheet().getSheetByName(tab);
-    if (!sheet) return;
-    readTable(tab)
-      .filter((r) => idSet[r.supplier_id])
-      .map((r) => r._row)
-      .sort((a, b) => b - a)
-      .forEach((row) => sheet.deleteRow(row));
+  const removed = {};
+  SEG_withLock(() => {
+    Object.keys(SEG.HEADERS).filter((tab) => tab !== SEG.TABS.GROUND_TRUTH && SEG.HEADERS[tab].indexOf('supplier_id') >= 0).forEach((tab) => {
+      removed[tab] = SEG_removeRows(tab, (r) => !!idSet[r.supplier_id]);
+    });
+    // Nothing refers to these IDs any more, so the numbers can be handed out again.
+    const column = (tab, key) => readTable(tab).map((r) => r[key]);
+    SEG_releaseIds('SUP', Object.keys(idSet), column(SEG.TABS.SUPPLIERS, 'supplier_id'), fresh);
+    SEG_releaseIds('DOC', (removed[SEG.TABS.DOCUMENTS] || []).map((r) => r.doc_id), column(SEG.TABS.DOCUMENTS, 'doc_id'), fresh);
+    SEG_releaseIds('REQ', (removed[SEG.TABS.SUPPLIER_REQS] || []).map((r) => r.requirement_id), column(SEG.TABS.SUPPLIER_REQS, 'requirement_id'), fresh);
   });
   console.log('Removed ' + label + ' suppliers: ' + Object.keys(idSet).join(', '));
   return ids.length;

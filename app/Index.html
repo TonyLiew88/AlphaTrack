@@ -7,21 +7,32 @@
   <title>AlphaTrack · Alpha Electronics Sdn. Bhd.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400..800&display=swap" rel="stylesheet">
   <?!= include('Styles'); ?>
 </head>
 <body>
   <div class="app">
     <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20L12 4l8 16"/><path d="M7.5 14h9"/></svg>
-        </span>
+        <svg class="brand-logo" width="40" height="40" viewBox="0 0 40 40" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="at-tile" x1="3" y1="1" x2="37" y2="39" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#7286FF"/><stop offset="0.52" stop-color="#4F46E5"/><stop offset="1" stop-color="#7C3AED"/>
+            </linearGradient>
+            <radialGradient id="at-shine" cx="11" cy="5" r="24" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.38"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <rect width="40" height="40" rx="12" fill="url(#at-tile)"/>
+          <rect width="40" height="40" rx="12" fill="url(#at-shine)"/>
+          <path d="M10.6 29.6 L20 9.8 L29.4 29.6" fill="none" stroke="#FFFFFF" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="20" cy="23.6" r="4.1" fill="#5EEAD4" fill-opacity="0.24"/>
+          <circle cx="20" cy="23.6" r="2.4" fill="#5EEAD4"/>
+        </svg>
         <div>
-          <div class="brand-name">AlphaTrack</div>
+          <div class="brand-name">Alpha<span>Track</span></div>
           <div class="brand-tag">Stay ahead of every supplier expiry</div>
         </div>
-        <button type="button" class="btn btn-icon side-close" id="side-close" aria-label="Close menu"><span data-icon="x"></span></button>
       </div>
       <nav class="nav">
         <div class="nav-group">Monitor</div>

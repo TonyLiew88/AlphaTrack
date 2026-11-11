@@ -64,6 +64,24 @@ function M1_datasetFiles(folder, files, duplicates) {
 }
 
 /**
+ * TESTING ONLY, run by hand: starts the demo data again from scratch, numbered from SUP001.
+ * Removes every supplier from the test dataset (BrightClean too) and any TEST supplier, with
+ * their documents and history (their Drive folders go to the bin), then imports the dataset
+ * again from the test-pdfs folder. Suppliers you registered yourself are kept.
+ */
+function M1_restartDemoData() {
+  const regNos = M1_DATASET.suppliers.map((s) => SEG_cleanText(s.info.registrationNo));
+  const isTest = (s) => /^TEST /.test(String(s.supplier_name)) && /^TEST-/.test(String(s.registration_no));
+  // Check the PDFs are reachable first, so a missing folder can't leave you with nothing.
+  M1_datasetFolderId();
+  M1_removeSuppliersForTesting((s) => regNos.indexOf(SEG_cleanText(s.registration_no)) >= 0 || isTest(s), 'demo', true);
+  readTable(SEG.TABS.GROUND_TRUTH)
+    .filter((r) => r.supplier_id || r.doc_id)
+    .forEach((r) => updateRow(SEG.TABS.GROUND_TRUTH, r._row, { supplier_id: '', doc_id: '' }));
+  return M1_importDemoDataset();
+}
+
+/**
  * TESTING ONLY, run by hand: removes BrightClean (the supplier registered live in the video)
  * and everything recorded about it, so the video can be recorded again. Its Drive folder goes
  * to the bin. The answer-key rows stay and are linked again after the next registration.
@@ -192,6 +210,7 @@ function M1_importDataset(folderId, options) {
   });
   appendRows(SEG.TABS.GROUND_TRUTH, added);
   report.push('GroundTruth: ' + added.length + ' row(s) added, ' + linked + ' existing row(s) linked to new IDs.');
+  SEG_fitColumns();
 
   SEG_audit({
     module: 'M1', action: 'DATASET_IMPORTED', recordType: 'SYSTEM', recordId: folderId, outcome: 'OK',

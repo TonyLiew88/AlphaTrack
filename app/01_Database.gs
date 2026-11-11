@@ -42,6 +42,7 @@ function SEG_setupDatabase() {
 
   const root = SEG_rootFolder();
   const seeded = typeof M1_seedMasterData === 'function' ? M1_seedMasterData() : [];
+  SEG_fitColumns();
 
   SEG_audit({
     module: 'M5', action: 'DATABASE_SETUP', recordType: 'SYSTEM', recordId: ss.getId(), outcome: 'OK',
@@ -229,6 +230,95 @@ function SEG_newId(prefix, existingIds, width) {
   const n = Math.max(fromRows, Number(props.getProperty(key)) || 0) + 1;
   props.setProperty(key, String(n));
   return prefix + String(n).padStart(width || 3, '0');
+}
+
+/**
+ * TESTING ONLY. After test rows are removed for good, lets their numbers be handed out again.
+ * Normally it only gives back numbers this clean-up removed, counting down from the newest one,
+ * so a number deleted by hand earlier stays retired. Example: the self-test borrows SUP001 and
+ * removes it, so the first real supplier still gets SUP001.
+ * fresh = true (the demo restart): start again after the highest number still in use.
+ * Returns the new "last number handed out".
+ */
+function SEG_releaseIds(prefix, removedIds, remainingIds, fresh) {
+  const props = PropertiesService.getScriptProperties();
+  const key = 'LAST_ID_' + prefix;
+  const num = (id) => {
+    const text = String(id || '');
+    return text.indexOf(prefix) === 0 ? Number(text.slice(prefix.length)) || 0 : 0;
+  };
+  const last = Number(props.getProperty(key)) || 0;
+  const inUse = remainingIds.reduce((m, id) => Math.max(m, num(id)), 0);
+  let n = last;
+  if (fresh) {
+    n = inUse;
+  } else {
+    const removed = {};
+    removedIds.forEach((id) => { removed[num(id)] = true; });
+    while (n > inUse && removed[n]) n--;
+  }
+  if (n !== last) props.setProperty(key, String(n));
+  return n;
+}
+
+/**
+ * TESTING ONLY: removes every row of a tab that matches, by rewriting the tab once (much faster
+ * than deleting rows one by one). matches(row) gets the row as an object keyed by header.
+ * Returns the removed rows.
+ */
+function SEG_removeRows(name, matches) {
+  const sheet = SEG_spreadsheet().getSheetByName(name);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const headers = SEG_headersOf(sheet);
+  const width = sheet.getLastColumn();
+  const range = sheet.getRange(2, 1, sheet.getLastRow() - 1, width);
+  const keep = [];
+  const removed = [];
+  range.getValues().forEach((cells) => {
+    if (cells.every((c) => c === '' || c === null)) return;
+    const obj = {};
+    headers.forEach((h, i) => { if (h) obj[h] = SEG_fromCell(cells[i]); });
+    if (matches(obj)) removed.push(obj); else keep.push(cells);
+  });
+  if (!removed.length) return [];
+  range.clearContent();
+  if (keep.length) sheet.getRange(2, 1, keep.length, width).setValues(keep);
+  return removed;
+}
+
+/**
+ * Makes every tab easy to read in the Sheet: each column fits its text, very long text wraps
+ * at about 360 px, and rows grow to fit. Runs after setup and after the dataset import, and
+ * from the AlphaTrack menu in the Sheet. Formatting only: it never changes a value.
+ */
+function SEG_fitColumns() {
+  const MAX = 360;
+  const MIN = 70;
+  const ss = SEG_spreadsheet();
+  Object.keys(SEG.HEADERS).forEach((name) => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet || !sheet.getLastColumn()) return;
+    try {
+      const cols = sheet.getLastColumn();
+      const rows = Math.max(1, sheet.getLastRow());
+      const all = sheet.getRange(1, 1, rows, cols);
+      all.setWrap(false).setVerticalAlignment('top');
+      sheet.autoResizeColumns(1, cols);
+      for (let c = 1; c <= cols; c++) {
+        const w = sheet.getColumnWidth(c);
+        if (w > MAX) {
+          sheet.setColumnWidth(c, MAX);
+          sheet.getRange(1, c, rows, 1).setWrap(true);
+        } else if (w < MIN) {
+          sheet.setColumnWidth(c, MIN);
+        }
+      }
+      sheet.autoResizeRows(1, rows);
+    } catch (err) {
+      console.warn('Could not fit the columns of ' + name + ': ' + err.message);
+    }
+  });
+  return 'Columns fitted';
 }
 
 /** 'TRUE', true, 'yes', '1' -> true. Blank -> fallback. */

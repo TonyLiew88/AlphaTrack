@@ -34,6 +34,6 @@ Good to know
   - The import and the local preview always leave BrightClean out, so you can do this live.
   - To record again: open Apps Script, choose M1_resetVideoDemo and click Run.
     It removes BrightClean only (its Drive folder goes to the bin); the other 7 suppliers stay.
-    BrightClean gets a new ID (for example SUP009) on the next take.
+    Its number is given back, so BrightClean registers under the same SUP number on the next take.
   - Without the reset, AlphaTrack refuses BrightClean because its registration number is taken.
     Deactivating it does not free the number.

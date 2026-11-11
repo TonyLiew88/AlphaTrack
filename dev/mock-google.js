@@ -103,11 +103,32 @@
       });
       return this;
     };
-    ['setNumberFormat', 'setFontWeight', 'setBackground', 'setFontColor'].forEach((m) => { this[m] = () => this; });
+    ['setNumberFormat', 'setFontWeight', 'setBackground', 'setFontColor', 'setVerticalAlignment'].forEach((m) => { this[m] = () => this; });
+    this.setWrap = (on) => { for (let c = col; c < col + numCols; c++) sheet.wrapped[c] = !!on; return this; };
+    this.clearContent = () => {
+      for (let r = 0; r < numRows; r++) {
+        const target = sheet.rows[row - 1 + r];
+        if (target) for (let c = 0; c < numCols; c++) target[col - 1 + c] = '';
+      }
+      return this;
+    };
   }
   function Sheet(name) {
     this.rows = [];
     this.maxRows = 1000;
+    this.widths = {};
+    this.wrapped = {};
+    // Like Sheets: about 7 px per character of the longest value, plus padding.
+    this.autoResizeColumns = (start, count) => {
+      for (let c = start; c < start + count; c++) {
+        const longest = this.rows.reduce((m, r) => Math.max(m, String(r[c - 1] === undefined ? '' : r[c - 1]).length), 0);
+        this.widths[c] = longest * 7 + 16;
+      }
+      return this;
+    };
+    this.getColumnWidth = (c) => this.widths[c] || 100;
+    this.setColumnWidth = (c, w) => { this.widths[c] = w; return this; };
+    this.autoResizeRows = () => this;
     this.getName = () => name;
     this.getLastRow = () => {
       let last = 0;
@@ -134,6 +155,7 @@
     this.setFrozenRows = () => this;
     this.deleteRow = (row) => { this.rows.splice(row - 1, 1); this.maxRows -= 1; return this; };
   }
+  const menus = [];
   const sheets = {};
   let sheetOrder = ['Sheet1'];
   sheets.Sheet1 = new Sheet('Sheet1');
@@ -148,7 +170,12 @@
   const SpreadsheetApp = {
     getActiveSpreadsheet: () => spreadsheet,
     openById: () => spreadsheet,
-    flush: () => {}
+    flush: () => {},
+    getUi: () => {
+      const menu = { items: [], addItem(label, fn) { menu.items.push([label, fn]); return menu; }, addToUi() { menus.push(menu); return menu; } };
+      return { createMenu: (title) => { menu.title = title; return menu; } };
+    },
+    __menus: () => menus
   };
 
   /* ------------------------------------------------------------- Drive */

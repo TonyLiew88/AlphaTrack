@@ -64,10 +64,24 @@ step('M1_removeTestSuppliers removes the TEST supplier and its rows', () => {
   if (removed !== 1 || left !== 0) throw new Error('removed ' + removed + ', rows left ' + left);
 });
 step('Demo data registers through the real functions', () => run('DEV_seedDemo()'));
-step('IDs are never reused after rows are deleted', () => {
-  const ids = json('M1_listSuppliers().map(s => s.supplierId)');
-  if (ids.indexOf('SUP001') >= 0) throw new Error(ids.join(', '));
-  return ids.sort().join(', ');
+step('Removing test data frees its numbers, so the first real supplier is SUP001', () => {
+  const ids = json('M1_listSuppliers().map(s => s.supplierId)').sort();
+  if (ids[0] !== 'SUP001') throw new Error(ids.join(', '));
+  return ids.join(', ');
+});
+step('A number that was handed out and deleted by hand is never reused', () => {
+  return run(`(function () {
+    const a = M1_saveSupplierDraft({ info: { supplierName: 'Hand Deleted Co' } }).supplier.supplierId;
+    const row = M1_findSupplierRow(a);
+    SEG_sheet(SEG.TABS.SUPPLIERS).deleteRow(row._row);
+    const b = M1_saveSupplierDraft({ info: { supplierName: 'Next Co' } }).supplier.supplierId;
+    if (a === b) throw new Error('reused ' + a);
+    M1_removeSuppliersForTesting((s) => s.supplier_id === b, 'scratch');
+    const c = M1_saveSupplierDraft({ info: { supplierName: 'After Cleanup Co' } }).supplier.supplierId;
+    if (c === a) throw new Error('reused the hand-deleted ' + a);
+    M1_removeSuppliersForTesting((s) => s.supplier_id === c, 'scratch');
+    return a + ' deleted by hand stays retired; ' + b + ' was freed by the test clean-up and given again as ' + c;
+  })()`);
 });
 step('Registration statuses are right for each demo supplier', () => {
   const list = json('M1_listSuppliers()');
@@ -375,6 +389,26 @@ step('Overview: dashboard numbers match the Sheet', () => {
   if (o.coverage.uploaded > o.coverage.required || !o.activity.length || o.attention.length > 6) throw new Error(JSON.stringify({ coverage: o.coverage, activity: o.activity.length, attention: o.attention.length }));
   return o.suppliers.total + ' suppliers, ' + current + ' current documents, ' + o.coverage.uploaded + ' of ' + o.coverage.required + ' mandatory on file, ' + o.attentionTotal + ' need attention';
 });
+step('Every tab fits its text: no column wider than 360 px, long text wraps, and the Sheet gets an AlphaTrack menu', () => {
+  return dsRun(`(function () {
+    SEG_fitColumns();
+    const bad = [];
+    let wrappedCols = 0;
+    Object.keys(SEG.HEADERS).forEach((name) => {
+      const sheet = SEG_sheet(name);
+      for (let c = 1; c <= sheet.getLastColumn(); c++) {
+        const w = sheet.getColumnWidth(c);
+        if (w > 360 || w < 70) bad.push(name + ' col ' + c + ' = ' + w);
+        if (sheet.wrapped[c]) wrappedCols++;
+      }
+    });
+    if (bad.length) throw new Error(bad.join('; '));
+    onOpen();
+    const menu = SpreadsheetApp.__menus().pop();
+    if (!menu || menu.title !== 'AlphaTrack' || menu.items[0][1] !== 'SEG_fitColumns') throw new Error('menu missing');
+    return 'all 13 tabs fitted, ' + wrappedCols + ' long-text columns wrap';
+  })()`);
+});
 step('A tab keeps growing past its first 1000 rows (real Sheets refuse to write past the end)', () => {
   return dsRun(`(function () {
     const sheet = SEG_sheet(SEG.TABS.RUNS);
@@ -457,6 +491,25 @@ step('Video demo reset removes BrightClean only, so it can be registered again',
     M1_uploadDocument({ supplierId: d.supplier.supplierId, requirementId: req, fileName: 'BrightClean_Cleaning_Service_Agreement_2026.pdf',
       mimeType: 'application/pdf', base64: Utilities.base64Encode(files['BrightClean_Cleaning_Service_Agreement_2026.pdf'].getBlob().getBytes()) });
     return 'registered again as ' + d.supplier.supplierId + ' with the same PDFs';
+  })()`);
+});
+
+step('Restarting the demo data numbers the suppliers from SUP001 again and keeps your own suppliers', () => {
+  return dsRun(`(function () {
+    M1_restartDemoData();
+    let ids = readTable(SEG.TABS.SUPPLIERS).map(s => s.supplier_id).sort();
+    const docs = readTable(SEG.TABS.DOCUMENTS);
+    const linked = readTable(SEG.TABS.GROUND_TRUTH).filter(r => r.doc_id).length;
+    if (ids.join() !== 'SUP001,SUP002,SUP003,SUP004,SUP005,SUP006,SUP007' || docs.length !== 17 || linked !== 17) {
+      throw new Error(ids.join(',') + ' / ' + docs.length + ' docs / ' + linked + ' linked');
+    }
+    if (docs.map(d => d.doc_id).sort()[0] !== 'DOC001') throw new Error('documents start at ' + docs.map(d => d.doc_id).sort()[0]);
+    const mine = M1_saveSupplierDraft({ info: { supplierName: 'My Own Supplier Sdn. Bhd.', registrationNo: 'MINE-1' } }).supplier.supplierId;
+    M1_restartDemoData();
+    const list = readTable(SEG.TABS.SUPPLIERS);
+    if (!list.some(s => s.supplier_id === mine) || list.length !== 8) throw new Error('your own supplier ' + mine + ' was not kept');
+    M1_removeSuppliersForTesting(s => s.supplier_id === mine, 'mine');
+    return 'suppliers SUP001-SUP007, documents from DOC001, answer key re-linked; your own supplier ' + mine + ' survives a restart';
   })()`);
 });
 
