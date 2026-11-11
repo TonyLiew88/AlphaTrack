@@ -9,7 +9,7 @@
  * It prints one line per document and two scores:
  *   Fields: every key field compared with the answer key (scope is free text, so it is left out)
  *   Issues: documents whose REVIEW issues are exactly the expected ones
- * Officer corrections are ignored: the score is about the AI's own reading.
+ * Officer approvals and corrections are ignored: the score is about the AI's own reading.
  */
 
 /** Fields compared for each class (scope is left out: it is free text). */
@@ -49,7 +49,7 @@ function M2_measureAccuracy(truthRows, documentRows, extractionRows) {
       truthRows.find((t) => t.file_name && t.file_name === doc.original_file_name);
     if (!truth) return; // not part of the test dataset
     const readings = extractionRows.filter((x) => x.doc_id === doc.doc_id && x.file_id === doc.file_id &&
-      x.processing_status !== M2.STATUS.CORRECTED && x.processing_status !== M2.STATUS.FAILED);
+      (x.processing_status === M2.STATUS.EXTRACTED || x.processing_status === M2.STATUS.NEEDS_REVIEW));
     if (!readings.length) {
       notRead.push(doc.doc_id);
       return;

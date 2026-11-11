@@ -19,6 +19,8 @@
   .m2-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .m2-form .full { grid-column: 1 / -1; }
   .m2-key { margin-top: 12px; }
+  /* Five result tiles in one row on wide screens; below 1200 px the shared two-column rule applies. */
+  @media (min-width: 1201px) { #m2-tiles { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     .m2-fields { grid-template-columns: 1fr; }
     .m2-fields dt { border-bottom: 0; padding-bottom: 2px; }
@@ -31,10 +33,11 @@
     <div>
       <div class="eyebrow">Intelligence · Member 2</div>
       <h1 class="page-title">AI Document Analysis</h1>
-      <p class="page-sub">Gemini reads every uploaded document once. Fixed rules then check what it read against the supplier register. Anything unclear goes to a person, never a guess.</p>
+      <p class="page-sub">Gemini reads every uploaded document once. Fixed rules then check what it read against the supplier register. Anything unclear goes to a person, never a guess. A result counts only after a person approves it.</p>
     </div>
     <div class="head-actions">
       <button type="button" class="btn btn-secondary" id="m2-refresh"><span data-icon="refresh" data-size="16"></span>Refresh</button>
+      <button type="button" class="btn btn-secondary" id="m2-approve-all"><span data-icon="check" data-size="16"></span>Approve all with no issues</button>
       <button type="button" class="btn btn-primary" id="m2-run"><span data-icon="sparkles" data-size="16"></span>Read waiting documents</button>
     </div>
   </div>

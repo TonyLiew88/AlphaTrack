@@ -13,16 +13,17 @@
   const byId = (id) => document.getElementById(id);
 
   const STATES = {
-    OK: { label: 'Read', chip: 'ex-ok', icon: 'checkCircle', tone: 'tone-ok', foot: 'Read by AI, nothing to check' },
+    OK: { label: 'Approved', chip: 'ex-ok', icon: 'checkCircle', tone: 'tone-ok', foot: 'Signed off by a person: done' },
+    PENDING: { label: 'Pending approval', chip: 'st-pending-ver', icon: 'eye', tone: 'tone-brand', foot: 'Read by AI, no issues: check and approve' },
     REVIEW: { label: 'Needs review', chip: 'st-pending-docs', icon: 'alert', tone: 'tone-warn', foot: 'A person should look at these' },
     FAILED: { label: 'Failed', chip: 'ex-bad', icon: 'xCircle', tone: 'tone-danger', foot: 'Could not be read; see the reason' },
     WAITING: { label: 'Waiting for AI', chip: 'ex-queued', icon: 'clock', tone: 'tone-info', foot: 'Uploaded, not read yet' }
   };
-  const STATE_ORDER = ['OK', 'REVIEW', 'FAILED', 'WAITING'];
+  const STATE_ORDER = ['OK', 'PENDING', 'REVIEW', 'FAILED', 'WAITING'];
   const CLASS_LABEL = { CONTRACT: 'Contract', LICENCE: 'Licence', CERTIFICATE: 'Certificate' };
   const CLASS_ICON = { CONTRACT: 'contract', LICENCE: 'licence', CERTIFICATE: 'certificate' };
   const DATE_FIELDS = ['issue_date', 'start_date', 'due_date'];
-  const READ_BATCH = 3; // documents per server call, so a click never hits the 6-minute limit
+  const READ_BATCH = 1; // one document per server call: the page updates after every document
 
   const st = { data: null, loading: null, bound: false, filter: { q: '', state: '', cls: '' }, running: false };
 
@@ -98,6 +99,10 @@
     const run = byId('m2-run');
     run.disabled = st.running || !waiting || !st.data.keySet;
     if (!st.running) run.innerHTML = I('sparkles', 16) + (waiting ? 'Read ' + waiting + ' waiting document' + (waiting === 1 ? '' : 's') : 'Nothing waiting');
+    const pending = st.data.counts.pending;
+    const all = byId('m2-approve-all');
+    all.disabled = st.running || !pending;
+    all.innerHTML = I('check', 16) + (pending ? 'Approve ' + pending + ' with no issues' : 'Nothing to approve');
   }
 
   function renderBanner() {
@@ -110,7 +115,7 @@
   function renderTiles() {
     const box = byId('m2-tiles');
     const c = st.data.counts;
-    const n = { OK: c.ok, REVIEW: c.review, FAILED: c.failed, WAITING: c.waiting };
+    const n = { OK: c.ok, PENDING: c.pending, REVIEW: c.review, FAILED: c.failed, WAITING: c.waiting };
     box.innerHTML = STATE_ORDER.map((s, i) => {
       const meta = STATES[s];
       return '<button type="button" class="tile" data-state="' + s + '" aria-pressed="' + (st.filter.state === s) + '" style="--i:' + i + '">' +
@@ -128,7 +133,7 @@
     const f = st.filter;
     const q = f.q.trim().toLowerCase();
     const all = st.data.documents;
-    const rank = { REVIEW: 0, FAILED: 1, WAITING: 2, OK: 3 };
+    const rank = { REVIEW: 0, PENDING: 1, FAILED: 2, WAITING: 3, OK: 4 };
     const rows = all.filter((d) =>
       (!f.state || d.state === f.state) && (!f.cls || d.documentClass === f.cls) &&
       (!q || [d.supplierName, d.docTypeName, d.fileName, d.docId, d.fields.document_no, d.fields.holder_name]
@@ -176,6 +181,12 @@
       : (d.state === 'WAITING'
         ? '<p class="callout info">' + I('clock', 18) + '<span>Not read yet. Use <strong>Read waiting documents</strong> or Re-analyse.</span></p>'
         : '<p class="callout ok">' + I('checkCircle', 18) + '<span>No issues. The details match the supplier register.</span></p>');
+    const approval = d.state === 'PENDING'
+      ? '<p class="callout info m2-section">' + I('eye', 18) + '<span><strong>Waiting for approval.</strong> Compare the fields below with the PDF, then press <strong>Approve</strong>. ' +
+        'Only approved documents count as done.</span></p>'
+      : (d.canApprove && d.state === 'REVIEW'
+        ? '<p class="callout neutral m2-section">' + I('info', 18) + '<span>Not approved yet. Fix the fields with <strong>Correct fields</strong>, or <strong>Approve</strong> with a note if the issue is acceptable.</span></p>'
+        : '');
 
     const fields = '<dl class="m2-fields">' + d.fieldNames.map((name) => {
       let extra = '';
@@ -189,7 +200,7 @@
 
     const meta = [];
     if (d.extractedAt) meta.push((neverRead ? 'Last try ' : 'Read ') + E(App.fmtDateTime(d.extractedAt)) + (d.model ? ' with ' + E(d.model) : ''));
-    if (d.correctedBy) meta.push('Corrected by ' + E(d.correctedBy) + ' on ' + E(App.fmtDateTime(d.correctedAt)));
+    if (d.correctedBy) meta.push((d.processingStatus === 'APPROVED' ? 'Approved by ' : 'Corrected by ') + E(d.correctedBy) + ' on ' + E(App.fmtDateTime(d.correctedAt)));
     if (d.readings > 1) meta.push(d.readings + ' readings of this file kept as history');
     meta.push('File: ' + E(d.fileName));
 
@@ -199,9 +210,11 @@
         (d.gaveUp ? ' It failed 3 times, so it is no longer retried by itself. Fix the cause, then use Re-analyse.' : '') + '</span></p>' : '') +
       (d.lastAttemptError ? '<p class="callout neutral m2-section">' + I('info', 18) + '<span><strong>The latest re-read failed:</strong> ' +
         E(d.lastAttemptError) + ' The result below is from the earlier good reading.</span></p>' : '') +
+      approval +
       '<div class="m2-section"><h3>Issues</h3>' + issues + '</div>' +
       (neverRead ? '' : '<div class="m2-section"><h3>What the AI read</h3>' + fields + '</div>') +
       (d.aiNotes ? '<p class="callout neutral m2-section">' + I('sparkles', 18) + '<span><strong>AI note:</strong> ' + E(d.aiNotes) + '</span></p>' : '') +
+      (d.approvalNote ? '<p class="callout neutral m2-section">' + I('check', 18) + '<span><strong>Approval note:</strong> ' + E(d.approvalNote) + '</span></p>' : '') +
       (d.correctionNote ? '<p class="callout neutral m2-section">' + I('edit', 18) + '<span><strong>Correction note:</strong> ' + E(d.correctionNote) + '</span></p>' : '') +
       '<div class="m2-meta">' + meta.map((m) => '<span>' + m + '</span>').join('') +
         (safeUrl(d.fileUrl) !== '#' ? '<a href="' + E(safeUrl(d.fileUrl)) + '" target="_blank" rel="noopener">' + I('external', 14) + ' Open the PDF</a>' : '') + '</div>';
@@ -225,9 +238,70 @@
       actions: [
         { label: 'Close', kind: 'secondary' },
         { label: 'Re-analyse', kind: 'secondary', busyLabel: 'Reading…', onClick: () => reanalyse(d) },
-        { label: 'Correct fields', kind: 'primary', onClick: () => { setTimeout(() => openCorrect(d.docId), 200); } }
+        { label: 'Correct fields', kind: d.canApprove ? 'secondary' : 'primary', onClick: () => { setTimeout(() => openCorrect(d.docId), 200); } }
+      ].concat(d.canApprove ? [{
+        label: 'Approve', kind: 'primary', busyLabel: 'Approving…',
+        onClick: async () => {
+          if (d.approveNeedsNote) { setTimeout(() => openApproveNote(d.docId), 200); return; }
+          await approve(d, '');
+        }
+      }] : [])
+    });
+  }
+
+  async function approve(d, note) {
+    const out = await App.api('M2_pageApprove', d.docId, note);
+    st.data = out.page;
+    render();
+    App.toast(d.docTypeName + ' (' + d.docId + ') approved.', 'ok');
+  }
+
+  /** Approving a reading that has issues needs a reason, which goes into the audit log. */
+  function openApproveNote(docId) {
+    const d = find(docId);
+    if (!d) return;
+    const codes = d.issues.filter((i) => i.effect === 'REVIEW').map((i) => words(i.code)).join(', ');
+    const dialog = App.modal({
+      title: 'Approve with issues · ' + d.docId,
+      body: '<p class="callout warn">' + I('alert', 18) + '<span>This reading has issues: <strong>' + E(codes) + '</strong>. ' +
+        'Approve it only if you checked the document and the issue is acceptable. Otherwise use Correct fields.</span></p>' +
+        '<div class="field m2-section"><label class="field-label" for="m2-approve-note">Why is it acceptable? <span class="req-mark" aria-hidden="true">*</span></label>' +
+        '<textarea class="textarea" id="m2-approve-note" rows="2" maxlength="300" placeholder="e.g. The certificate uses the trading name of the supplier"></textarea>' +
+        '<span class="error-text" id="m2-approve-note-error" hidden>Write a short reason.</span></div>',
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        {
+          label: 'Approve', kind: 'primary', busyLabel: 'Approving…',
+          onClick: async (ctx) => {
+            const note = ctx.body.querySelector('#m2-approve-note').value.trim();
+            ctx.body.querySelector('#m2-approve-note-error').hidden = !!note;
+            if (!note) { ctx.body.querySelector('#m2-approve-note').focus(); return false; }
+            await approve(d, note);
+          }
+        }
       ]
     });
+    dialog.body.querySelector('#m2-approve-note').addEventListener('input', () => { dialog.body.querySelector('#m2-approve-note-error').hidden = true; });
+  }
+
+  async function approveAllClean() {
+    const n = st.data ? st.data.counts.pending : 0;
+    if (!n) return;
+    const ok = await App.confirm('Approve ' + n + ' document' + (n === 1 ? '' : 's') + ' that the AI read with no issues? ' +
+      'Each approval is logged with your name. Documents with issues are not touched.', 'Approve ' + n);
+    if (!ok) return;
+    const btn = byId('m2-approve-all');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Approving…';
+    try {
+      const out = await App.api('M2_pageApproveAllClean');
+      st.data = out.page;
+      App.toast('Approved ' + out.approved + ' document' + (out.approved === 1 ? '' : 's') + '.', 'ok');
+    } catch (err) {
+      App.toast(err.message, 'error');
+    } finally {
+      render();
+    }
   }
 
   async function reanalyse(d) {
@@ -314,15 +388,28 @@
     btn.disabled = true;
     let done = 0;
     let failed = 0;
+    let quotaHit = false;
+    const total = st.data ? st.data.counts.waiting + st.data.counts.failed : 0;
     try {
-      for (let round = 0; round < 20; round++) {
-        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Reading… ' + done + ' done';
-        const r = await App.api('M2_pageProcessQueue', READ_BATCH);
+      for (let round = 0; round < 40; round++) {
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Reading ' + (done + 1) + (total ? ' of ' + total : '') + '…';
+        // Apps Script ends a run after 6 minutes, and the page is not always told. Stop waiting at
+        // 6.5 minutes so the button never spins forever; whatever was read is already saved.
+        const r = await Promise.race([
+          App.api('M2_pageProcessQueue', READ_BATCH),
+          new Promise((resolve, reject) => setTimeout(() => reject(new Error(
+            'The server did not answer for 6 minutes, so the page stopped waiting. The list was refreshed; press the button again to continue.')), 390000))
+        ]);
         done += r.read;
         failed += r.failed;
+        // Show each result at once: tiles and table move while Gemini works through the list.
+        if (r.page) { st.data = r.page; renderTiles(); renderTable(); }
+        if (r.quotaStopped) { quotaHit = true; break; } // out of Gemini quota: stop, nothing is given up
         if (!r.left || !r.handled || !r.read) break; // finished, or only cached/skipped ones are left
       }
-      App.toast('Gemini read ' + done + ' document' + (done === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed' : '') + '.', failed ? 'error' : 'ok');
+      App.toast(quotaHit
+        ? 'Gemini read ' + done + ' document' + (done === 1 ? '' : 's') + ', then its free-tier limit was reached. Try again later: the rest stay waiting.'
+        : 'Gemini read ' + done + ' document' + (done === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed' : '') + '.', (failed || quotaHit) ? 'error' : 'ok');
     } catch (err) {
       App.toast(err.message, 'error');
     } finally {
@@ -338,6 +425,7 @@
     st.bound = true;
     byId('m2-refresh').addEventListener('click', () => load());
     byId('m2-run').addEventListener('click', runQueue);
+    byId('m2-approve-all').addEventListener('click', approveAllClean);
     byId('m2-search').addEventListener('input', (e) => { st.filter.q = e.target.value; if (st.data) renderTable(); });
     byId('m2-filter-class').addEventListener('change', (e) => { st.filter.cls = e.target.value; if (st.data) renderTable(); });
     byId('m2-tiles').addEventListener('click', (e) => {

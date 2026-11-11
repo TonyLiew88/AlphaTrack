@@ -284,8 +284,8 @@ function M1_contentMatchesType(bytes, mime) {
  * not compliance: expiry and risk come from Member 3.
  *   DRAFT                 not submitted yet
  *   PENDING_DOCUMENTS     submitted, a mandatory document has no current file
- *   PENDING_VERIFICATION  every mandatory document uploaded, not all read by AI yet
- *   ACTIVE_MONITORING     every mandatory document uploaded and read by AI
+ *   PENDING_VERIFICATION  every mandatory document uploaded, not all read by AI and approved yet
+ *   ACTIVE_MONITORING     every mandatory document uploaded, read by AI and approved by a person
  * requirements: [{ requirementId, mandatory, name }] (active only)
  */
 function M1_assessRegistration(submitted, requirements, documents, extractions) {
@@ -313,10 +313,10 @@ function M1_assessRegistration(submitted, requirements, documents, extractions) 
     explanation = 'Waiting for mandatory documents: ' + missing.join(', ') + '.';
   } else if (unverified.length) {
     status = S.PENDING_VERIFICATION;
-    explanation = 'All mandatory documents uploaded. Waiting for AI extraction of: ' + unverified.join(', ') + '.';
+    explanation = 'All mandatory documents uploaded. Waiting for AI reading or approval of: ' + unverified.join(', ') + '.';
   } else {
     status = S.ACTIVE_MONITORING;
-    explanation = 'All mandatory documents uploaded and read by AI. Expiry monitoring is active.';
+    explanation = 'All mandatory documents uploaded, read by AI and approved. Expiry monitoring is active.';
   }
   return {
     status: status,
@@ -1104,12 +1104,12 @@ function test_M1_rules() {
     expect('A superseded version does not count',
       M1_assessRegistration(true, R, [doc('DOC001', 'REQ0001'), doc('DOC002', 'REQ0002', 'SUPERSEDED')], []).status === 'PENDING_DOCUMENTS');
     expect('Missing optional documents do not block -> PENDING_VERIFICATION', M1_assessRegistration(true, R, both, []).status === 'PENDING_VERIFICATION');
-    const read = [{ doc_id: 'DOC001', file_id: 'FDOC001', processing_status: 'EXTRACTED' }, { doc_id: 'DOC002', file_id: 'FDOC002', processing_status: 'EXTRACTED' }];
+    const read = [{ doc_id: 'DOC001', file_id: 'FDOC001', processing_status: SEG.EXTRACTION_OK[0] }, { doc_id: 'DOC002', file_id: 'FDOC002', processing_status: SEG.EXTRACTION_OK[0] }];
     expect('Every mandatory document read by AI -> ACTIVE_MONITORING', M1_assessRegistration(true, R, both, read).status === 'ACTIVE_MONITORING');
     expect('A failed extraction keeps PENDING_VERIFICATION',
       M1_assessRegistration(true, R, both, [read[0], { doc_id: 'DOC002', file_id: 'FDOC002', processing_status: 'EXTRACTION_FAILED' }]).status === 'PENDING_VERIFICATION');
     expect('An extraction of an older file does not count',
-      M1_assessRegistration(true, R, both, [read[0], { doc_id: 'DOC002', file_id: 'OLD', processing_status: 'EXTRACTED' }]).status === 'PENDING_VERIFICATION');
+      M1_assessRegistration(true, R, both, [read[0], { doc_id: 'DOC002', file_id: 'OLD', processing_status: SEG.EXTRACTION_OK[0] }]).status === 'PENDING_VERIFICATION');
     expect('The next supplier ID follows the highest one', nextId('SUP', ['SUP001', 'SUP009'], 3) === 'SUP010');
   });
 }

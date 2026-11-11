@@ -80,8 +80,10 @@ const SEG = {
 
   CRITICALITY: ['LOW', 'MEDIUM', 'HIGH'],
 
-  // processing_status values in Extractions that mean "read successfully" (Member 2 writes them).
-  EXTRACTION_OK: ['EXTRACTED', 'CORRECTED'],
+  // processing_status values in Extractions that mean "done": a person has signed the AI's reading off.
+  // EXTRACTED only means "the AI has read it, waiting for approval" (team decision, 11 Nov 2026).
+  // APPROVED = an officer approved the fields as read; CORRECTED = an officer fixed and saved them.
+  EXTRACTION_OK: ['APPROVED', 'CORRECTED'],
 
   UPLOAD: {
     MAX_BYTES: 10 * 1024 * 1024,

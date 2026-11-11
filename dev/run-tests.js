@@ -105,7 +105,7 @@ step('A finished extraction (written by Member 2) moves SecureGuard to ACTIVE_MO
     const queue = M1_getDocumentsAwaitingExtraction().filter(d => d.supplierId === s.supplierId);
     if (queue.length !== 3) throw new Error('queue has ' + queue.length);
     appendRows(SEG.TABS.EXTRACTIONS, queue.map(d => ({ doc_id: d.docId, supplier_id: d.supplierId, document_class: d.documentClass,
-      file_id: d.fileId, processing_status: 'EXTRACTED', extracted_at: SEG_now() })));
+      file_id: d.fileId, processing_status: SEG.EXTRACTION_OK[0], extracted_at: SEG_now() })));
     const status = M1_refreshRegistrationStatus(s.supplierId);
     if (status !== 'ACTIVE_MONITORING') throw new Error(status);
     if (M1_getDocumentsAwaitingExtraction().some(d => d.supplierId === s.supplierId)) throw new Error('still queued');

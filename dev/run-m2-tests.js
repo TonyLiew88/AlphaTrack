@@ -64,6 +64,7 @@ ctx.UrlFetchApp = {
     const call = { url: url, headers: options.headers, body: body };
     fake.calls.push(call);
     const respond = (code, obj) => ({ getResponseCode: () => code, getContentText: () => (typeof obj === 'string' ? obj : JSON.stringify(obj)) });
+    if (fake.slowMs) run('__clock += ' + fake.slowMs);
     if (fake.mode === 'status') return respond(fake.status, fake.body || { error: { message: 'fake error' } });
     if (fake.mode === 'garbage') return respond(200, '<html>not json</html>');
     const parts = body.contents[0].parts;
@@ -154,9 +155,9 @@ step('M2_retryFailedDocuments reads the given-up document again after the cause 
   return s.results[0].docId + ' ' + s.results[0].processingStatus;
 });
 
-step('M2_processQueue reads the other 15; all 17 are read with 17 Gemini calls in total', () => {
+step('M2_processQueue reads the other 15 (the 2 waiting for approval are not read again): 17 Gemini calls in total', () => {
   const s = json('M2_processQueue()');
-  check(s.waiting === 15 && s.read === 15 && s.failed === 0, JSON.stringify(s).slice(0, 300));
+  check(s.waiting === 17 && s.read === 15 && s.cached === 2 && s.failed === 0, JSON.stringify(s).slice(0, 300));
   check(fake.calls.length === 17, fake.calls.length + ' Gemini calls');
   return s.read + ' read now, ' + fake.calls.length + ' Gemini calls in total';
 });
@@ -222,38 +223,74 @@ step('The 6 required cases end as the brief says', () => {
   return 'name, expiry, conflict, unreadable, open-ended, auto-renewal';
 });
 
-step('Page after reading: 13 read, 4 need review (name, expiry, conflict, unreadable), 0 failed, 0 waiting', () => {
+step('Page after reading: 0 approved, 13 pending approval, 4 need review, 0 failed, 0 waiting', () => {
   const p = json('M2_getAnalysisPage()');
   check(p.keySet === true, 'key not seen');
-  check(p.counts.ok === 13 && p.counts.review === 4 && p.counts.failed === 0 && p.counts.waiting === 0, JSON.stringify(p.counts));
+  check(p.counts.ok === 0 && p.counts.pending === 13 && p.counts.review === 4 && p.counts.failed === 0 && p.counts.waiting === 0, JSON.stringify(p.counts));
+  check(p.documents.filter((d) => d.state === 'PENDING').every((d) => d.canApprove && !d.approveNeedsNote), 'pending ones must be approvable without a note');
   const review = p.documents.filter((d) => d.state === 'REVIEW').map((d) => d.issues.map((i) => i.code).join('+')).sort().join(', ');
   check(review === 'CONFLICTING_DATES, MISSING_EXPIRY, NAME_MISMATCH, UNREADABLE', review);
   const open = p.documents.find((d) => d.fileName === 'Voltline_Electrical_Maintenance_Agreement.pdf');
-  check(open.state === 'OK' && open.issues[0].effect === 'INFO', 'an open-ended contract must not need review');
+  check(open.state === 'PENDING' && open.issues[0].effect === 'INFO', 'an open-ended contract must not need review');
   const swift = p.documents.find((d) => d.fileName === 'SwiftHaul_Insurance_Certificate.pdf');
   check(swift.conflictingDates.join() === '2026-11-30,2027-11-30', 'conflicting dates not shown: ' + swift.conflictingDates);
   return JSON.stringify(p.counts);
 });
 
-step('Suppliers move to Active monitoring once every mandatory document is read', () => {
+const statusesAre = (want) => {
   const list = json('M1_listSuppliers()');
-  const want = {
-    'Kilat Shine Services Sdn. Bhd.': 'ACTIVE_MONITORING', 'Perisai Guard Security Sdn. Bhd.': 'ACTIVE_MONITORING',
-    'Voltline Electrical Engineering Sdn. Bhd.': 'ACTIVE_MONITORING', 'Swift Haul Logistics Sdn. Bhd.': 'ACTIVE_MONITORING',
+  const wrong = Object.keys(want).filter((n) => list.find((s) => s.supplierName === n).registrationStatus !== want[n]);
+  check(wrong.length === 0, 'wrong: ' + wrong.map((n) => n + ' is ' + list.find((s) => s.supplierName === n).registrationStatus).join(', '));
+};
+const docIdOf = (fileName) => json(`readTable(SEG.TABS.DOCUMENTS).find(d => d.original_file_name === '${fileName}').doc_id`);
+const throwsMsg = (code) => { try { run(code); } catch (e) { return e.message; } return ''; };
+
+step('Reading alone does not finish anything: every supplier still waits for approval', () => {
+  statusesAre({
+    'Kilat Shine Services Sdn. Bhd.': 'PENDING_VERIFICATION', 'Perisai Guard Security Sdn. Bhd.': 'PENDING_VERIFICATION',
+    'Voltline Electrical Engineering Sdn. Bhd.': 'PENDING_VERIFICATION', 'Swift Haul Logistics Sdn. Bhd.': 'PENDING_VERIFICATION',
     'Cahaya Facility Services Sdn. Bhd.': 'PENDING_VERIFICATION', 'Mutiara Components Sdn. Bhd.': 'PENDING_DOCUMENTS',
     'Kencana Microparts Sdn. Bhd.': 'DRAFT'
-  };
-  const wrong = Object.keys(want).filter((n) => list.find((s) => s.supplierName === n).registrationStatus !== want[n]);
-  check(wrong.length === 0, 'wrong: ' + wrong.join(', '));
-  return '4 active, Cahaya waits for the unreadable scan';
+  });
+  return 'nobody active before approval';
+});
+
+step('Approve all with no issues: approves the 13 clean ones, logs each, and activates Kilat Shine and Perisai', () => {
+  const out = json('M2_pageApproveAllClean()');
+  check(out.approved === 13 && out.page.counts.ok === 13 && out.page.counts.pending === 0 && out.page.counts.review === 4, JSON.stringify(out.page.counts));
+  const audit = json("readTable(SEG.TABS.AUDIT).filter(a => a.action === 'EXTRACTION_APPROVED')").length;
+  check(audit === 13, audit + ' approval audit lines');
+  statusesAre({
+    'Kilat Shine Services Sdn. Bhd.': 'ACTIVE_MONITORING', 'Perisai Guard Security Sdn. Bhd.': 'ACTIVE_MONITORING',
+    'Voltline Electrical Engineering Sdn. Bhd.': 'PENDING_VERIFICATION', 'Swift Haul Logistics Sdn. Bhd.': 'PENDING_VERIFICATION',
+    'Cahaya Facility Services Sdn. Bhd.': 'PENDING_VERIFICATION'
+  });
+  check(json('M2_pageApproveAllClean()').approved === 0, 'a second click must approve nothing');
+  return '13 approved; the 4 with issues wait for a person';
+});
+
+step('A reading with issues needs a note to be approved; an unreadable scan cannot be approved', () => {
+  const reg = docIdOf('Voltline_Contractor_Registration.pdf');
+  check(/note/.test(throwsMsg(`M2_approveExtraction('${reg}', '')`)), 'approved without a note');
+  run(`M2_approveExtraction('${reg}', 'Known trading name of the same company')`);
+  check(/already approved/.test(throwsMsg(`M2_approveExtraction('${reg}', 'again')`)), 'approved twice');
+  const scan = docIdOf('Cahaya_Insurance_Certificate_scan.pdf');
+  check(/could not be read/.test(throwsMsg(`M2_approveExtraction('${scan}', 'looks fine')`)), 'unreadable scan approved');
+  const comp = docIdOf('Voltline_Electrical_Competency_Certificate.pdf');
+  run(`M2_approveExtraction('${comp}', 'Competency evidence has no expiry by policy')`);
+  statusesAre({ 'Voltline Electrical Engineering Sdn. Bhd.': 'ACTIVE_MONITORING' });
+  const page = json('M2_getAnalysisPage()').documents.find((d) => d.docId === reg);
+  check(page.state === 'OK' && page.processingStatus === 'APPROVED' && page.approvalNote === 'Known trading name of the same company' &&
+    page.correctedBy && page.issues[0].code === 'NAME_MISMATCH', JSON.stringify(page).slice(0, 300));
+  return 'Voltline active after both approvals with notes';
 });
 
 step('A second run calls Gemini 0 times (cache), and the unreadable scan is not re-sent', () => {
   const before = fake.calls.length;
   const s = json('M2_processQueue()');
   check(fake.calls.length === before, (fake.calls.length - before) + ' extra calls');
-  check(s.waiting === 1 && s.cached === 1, JSON.stringify(s).slice(0, 200));
-  return s.waiting + ' still waiting (the scan, cached as NEEDS_REVIEW)';
+  check(s.waiting === 2 && s.cached === 2, JSON.stringify(s).slice(0, 200));
+  return s.waiting + ' not approved yet (the conflicting dates and the scan), both cached';
 });
 
 step('Audit log: one EXTRACTION_DONE per reading, and the key appears in no tab', () => {
@@ -314,9 +351,9 @@ step('HTTP 429 per minute: waits as long as Gemini asks (here 7 s), keeps the go
   check(fake.calls.length - before === 3 && sleeps.join() === '8000,8000', 'tries ' + (fake.calls.length - before) + ', sleeps ' + sleeps.join());
   check(r.processingStatus === 'FAILED' && /PerMinute/.test(r.message) && /in a minute/.test(r.message), r.message);
   const page = json('M2_getAnalysisPage()').documents.find((d) => d.docId === docId);
-  check(page.state === 'OK' && page.processingStatus === 'EXTRACTED' && /PerMinute/.test(page.lastAttemptError), JSON.stringify(page).slice(0, 300));
+  check(page.state === 'OK' && page.processingStatus === 'APPROVED' && /PerMinute/.test(page.lastAttemptError), JSON.stringify(page).slice(0, 300));
   const reading = json(`(function () { const d = readTable(SEG.TABS.DOCUMENTS).find(x => x.doc_id === '${docId}'); return M2_latestReading(d.doc_id, d.file_id); })()`);
-  check(reading.processingStatus === 'EXTRACTED' && reading.fields.holder_name, 'M2_latestReading must skip the failed row');
+  check(reading.processingStatus === 'APPROVED' && reading.approved === true && reading.fields.holder_name, 'M2_latestReading must skip the failed row');
   return 'slept ' + sleeps.join(' + ') + ' ms, page still shows the good reading';
 });
 
@@ -337,11 +374,12 @@ step('Page Re-analyse button: reads again, keeps the old reading, refuses an unk
   const out = json(`M2_pageReanalyse('${docId}')`);
   check(fake.calls.length === before + 1 && out.result.processingStatus === 'EXTRACTED' && out.page.documents.length === 17, JSON.stringify(out.result));
   const rows = json(`readTable(SEG.TABS.EXTRACTIONS).filter(x => x.doc_id === '${docId}')`).length;
-  check(rows === 2, rows + ' rows (the old reading must stay as history)');
+  check(rows === 3, rows + ' rows (AI reading, its approval and the new reading must all stay as history)');
+  check(out.page.documents.find((d) => d.docId === docId).state === 'PENDING', 'a new reading must wait for approval again');
   let msg = '';
   try { run(`M2_pageReanalyse('DOC999')`); } catch (e) { msg = e.message; }
   check(/No document/.test(msg), 'unknown document not refused: ' + msg);
-  return 'history kept: ' + rows + ' readings';
+  return 'history kept: ' + rows + ' rows; the new reading waits for approval';
 });
 
 step('An officer correction saves CORRECTED, logs what changed, and activates the supplier', () => {
@@ -358,26 +396,28 @@ step('An officer correction saves CORRECTED, logs what changed, and activates th
   check(audit.length === 1 && JSON.parse(audit[0].details).changed.length === 5, 'audit');
   const cahaya = json('M1_listSuppliers()').find((s) => s.supplierName === 'Cahaya Facility Services Sdn. Bhd.');
   check(cahaya.registrationStatus === 'ACTIVE_MONITORING', cahaya.registrationStatus);
-  check(json('M1_getDocumentsAwaitingExtraction()').length === 0, 'queue not empty');
+  check(!json('M1_getDocumentsAwaitingExtraction()').some((d) => d.docId === docId), 'the corrected scan is still in the queue');
   const page = json('M2_getAnalysisPage()').documents.find((d) => d.docId === docId);
   check(page.state === 'OK' && page.processingStatus === 'CORRECTED' && page.correctionNote === 'Read from the paper copy' && page.correctedBy, 'page view');
-  return '5 fields changed, Cahaya now active, queue empty';
+  return '5 fields changed, Cahaya now active';
 });
 
-step('Page Correct form: a name the officer leaves different keeps NAME_MISMATCH', () => {
-  const docId = json("readTable(SEG.TABS.DOCUMENTS).find(d => d.original_file_name === 'Voltline_Contractor_Registration.pdf').doc_id");
-  const out = json(`M2_pageCorrect('${docId}', {}, 'Checked: the name really is printed like this')`);
-  check(out.result.changed.length === 0 && out.result.issues.join() === 'NAME_MISMATCH', JSON.stringify(out.result));
-  check(out.page.documents.find((d) => d.docId === docId).state === 'REVIEW', 'should still need review');
-  return 'still needs review';
+step('Page Correct form: a name the officer leaves different keeps NAME_MISMATCH, and the correction signs it off', () => {
+  const docId = json("readTable(SEG.TABS.DOCUMENTS).find(d => d.original_file_name === 'SwiftHaul_Insurance_Certificate.pdf').doc_id");
+  const out = json(`M2_pageCorrect('${docId}', { holder_name: 'Swift Haul Express Sdn. Bhd.', due_date: '2027-11-30' }, 'Checked the schedule page')`);
+  check(out.result.issues.join() === 'NAME_MISMATCH', JSON.stringify(out.result));
+  const page = out.page.documents.find((d) => d.docId === docId);
+  check(page.state === 'OK' && page.processingStatus === 'CORRECTED' && !page.canApprove, JSON.stringify(page).slice(0, 200));
+  statusesAre({ 'Swift Haul Logistics Sdn. Bhd.': 'ACTIVE_MONITORING' });
+  return 'issue kept on record, document signed off, Swift Haul active';
 });
 
-step('M2_rereadOutdated reads again only what an older prompt read, never an officer correction', () => {
+step('M2_rereadOutdated reads again only what an older prompt read, never what a person approved or corrected', () => {
   check(json('M2_rereadOutdated()').outdated === 0, 'readings of the current prompt counted as outdated');
   // Make two readings look as if the old prompt (no prompt_version) had made them.
   run(`(function () {
     const docs = readTable(SEG.TABS.DOCUMENTS);
-    const ids = ['KilatShine_Insurance_Certificate.pdf', 'Voltline_Electrical_Maintenance_Agreement.pdf']
+    const ids = ['KilatShine_Insurance_Certificate.pdf', 'Mutiara_Supply_Agreement.pdf']
       .map(n => docs.find(d => d.original_file_name === n).doc_id);
     readTable(SEG.TABS.EXTRACTIONS).forEach(x => {
       if (ids.indexOf(x.doc_id) === -1) return;
@@ -387,9 +427,46 @@ step('M2_rereadOutdated reads again only what an older prompt read, never an off
   })()`);
   const before = fake.calls.length;
   const r = json('M2_rereadOutdated()');
-  check(r.outdated === 2 && r.reread === 2 && r.left === 0 && fake.calls.length === before + 2, JSON.stringify(r).slice(0, 300));
+  check(r.outdated === 1 && r.reread === 1 && r.left === 0 && fake.calls.length === before + 1, JSON.stringify(r).slice(0, 300));
   check(json('M2_rereadOutdated()').outdated === 0, 'a second run should find nothing');
-  return '2 read again, the corrected Cahaya scan left alone';
+  return 'the unapproved one read again, the approved one left alone';
+});
+
+step('Daily quota used up: a batch stops after ONE call, never gives a document up, and reads all once the limit is back', () => {
+  // Three documents lose their readings (as after a dataset reset), so they wait for the AI again.
+  const names = ['KilatShine_Business_Registration_Record.pdf', 'PerisaiGuard_Security_Agency_Licence.pdf', 'SwiftHaul_Operating_Permit.pdf'];
+  const ids = names.map(docIdOf);
+  run(`SEG_removeRows(SEG.TABS.EXTRACTIONS, (r) => ${JSON.stringify(ids)}.indexOf(r.doc_id) !== -1)`);
+  fake.mode = 'status'; fake.status = 429;
+  fake.body = { error: { code: 429, details: [{ '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+    violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }] } };
+  // Click "Read waiting documents" four times while the quota is used up.
+  for (let i = 0; i < 4; i++) {
+    const before = fake.calls.length;
+    const r = json('M2_pageProcessQueue(3)');
+    check(r.quotaStopped === true && fake.calls.length === before + 1, 'run ' + (i + 1) + ': ' + (fake.calls.length - before) + ' calls, ' + JSON.stringify(r));
+  }
+  const page = json('M2_getAnalysisPage()').documents.filter((d) => ids.indexOf(d.docId) !== -1);
+  check(page.every((d) => !d.gaveUp), 'a document was given up because of the quota');
+  // The limit is back: one normal run reads all three.
+  fake.mode = 'answer'; fake.body = null;
+  const before = fake.calls.length;
+  const r = json('M2_processQueue()');
+  check(r.read === 3 && fake.calls.length === before + 3 && !r.quotaStopped, JSON.stringify(r).slice(0, 300));
+  return '4 runs x 1 call while out of quota, then all 3 read';
+});
+
+step('Overloaded Gemini (503, 70 s per answer): no retry after 60 s, the run ends by itself with the reason', () => {
+  const docId = docIdOf('Mutiara_ISO_9001_Certificate.pdf');
+  run('var __clock = 0; var __realNow = Date.now; Date.now = function () { return __realNow() + __clock; }');
+  fake.mode = 'status'; fake.status = 503; fake.body = null; fake.slowMs = 70000;
+  const before = fake.calls.length;
+  const r = json(`M2_reanalyse('${docId}')`);
+  fake.mode = 'answer'; fake.slowMs = 0;
+  run('Date.now = __realNow');
+  check(fake.calls.length === before + 1, (fake.calls.length - before) + ' calls, want 1');
+  check(r.processingStatus === 'FAILED' && /too slowly/.test(r.message) && /HTTP 503/.test(r.message), r.message);
+  return r.message.slice(0, 110) + '...';
 });
 
 step('The Overview shows the AI module as Connected', () => {

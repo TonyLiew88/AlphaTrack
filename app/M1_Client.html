@@ -12,8 +12,8 @@
   const STATUS = {
     DRAFT: { label: 'Draft', cls: 'st-draft', callout: 'neutral', icon: 'edit', tone: 'tone-neutral', foot: 'Registration not submitted' },
     PENDING_DOCUMENTS: { label: 'Pending documents', cls: 'st-pending-docs', callout: 'warn', icon: 'alert', tone: 'tone-warn', foot: 'A mandatory document is missing' },
-    PENDING_VERIFICATION: { label: 'Pending verification', cls: 'st-pending-ver', callout: 'info', icon: 'sparkles', tone: 'tone-info', foot: 'Waiting for AI extraction' },
-    ACTIVE_MONITORING: { label: 'Active monitoring', cls: 'st-active', callout: 'ok', icon: 'shield', tone: 'tone-ok', foot: 'All documents read by AI' }
+    PENDING_VERIFICATION: { label: 'Pending verification', cls: 'st-pending-ver', callout: 'info', icon: 'sparkles', tone: 'tone-info', foot: 'Waiting for AI reading or approval' },
+    ACTIVE_MONITORING: { label: 'Active monitoring', cls: 'st-active', callout: 'ok', icon: 'shield', tone: 'tone-ok', foot: 'All documents approved' }
   };
   const STATUS_ORDER = ['DRAFT', 'PENDING_DOCUMENTS', 'PENDING_VERIFICATION', 'ACTIVE_MONITORING'];
   const CLASS_LABEL = { CONTRACT: 'Contract', LICENCE: 'Licence', CERTIFICATE: 'Certificate' };
@@ -130,7 +130,10 @@
     const map = {
       QUEUED: ['Queued for AI extraction', 'ex-queued', true], PROCESSING: ['AI extraction running', 'ex-queued', true],
       PAUSED: ['AI paused: supplier deactivated', 'ex-none', false],
-      EXTRACTED: ['Read by AI', 'ex-ok', false], CORRECTED: ['Read by AI, corrected', 'ex-ok', false], NOT_REQUESTED: ['Not sent to AI', 'ex-none', false]
+      // EXTRACTED = read by the AI but not approved yet; only APPROVED and CORRECTED count as done.
+      EXTRACTED: ['Read by AI, waiting for approval', 'ex-queued', false], APPROVED: ['Approved', 'ex-ok', false],
+      CORRECTED: ['Corrected and approved', 'ex-ok', false], NEEDS_REVIEW: ['AI could not read it: needs review', 'ex-bad', false],
+      FAILED: ['AI reading failed', 'ex-bad', false], NOT_REQUESTED: ['Not sent to AI', 'ex-none', false]
     };
     const m = map[s] || [String(s || 'Unknown').replace(/_/g, ' ').toLowerCase(), 'ex-bad', false];
     return '<span class="chip ' + m[1] + ' chip-dot' + (m[2] ? ' chip-live' : '') + '">' + E(m[0]) + '</span>';
@@ -771,7 +774,7 @@
       '<div class="callout ' + (missing.length ? 'warn' : 'info') + '">' + I(missing.length ? 'alert' : 'info', 18) + '<div>After you register, the status will be ' + statusChip(predicted) + '<br>' +
       (missing.length
         ? 'Still missing: ' + E(missing.join(', ')) + '. The supplier is registered, but isn’t treated as complete until these arrive.'
-        : 'All mandatory documents are uploaded. Next they are read by AI Document Analysis.') + '</div></div>';
+        : 'All mandatory documents are uploaded. Next they are read by AI Document Analysis and approved by a person.') + '</div></div>';
   }
 
   function stepFoot() {
