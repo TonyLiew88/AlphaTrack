@@ -32,5 +32,8 @@ VIDEO DEMO: REGISTER BRIGHTCLEAN FROM START TO FINISH
 
 Good to know
   - The import and the local preview always leave BrightClean out, so you can do this live.
-  - If BrightClean is already registered, AlphaTrack says the registration number is taken.
-    Deactivating it does not free the number; use a fresh copy of the app (or the local preview) to record again.
+  - To record again: open Apps Script, choose M1_resetVideoDemo and click Run.
+    It removes BrightClean only (its Drive folder goes to the bin); the other 7 suppliers stay.
+    BrightClean gets a new ID (for example SUP009) on the next take.
+  - Without the reset, AlphaTrack refuses BrightClean because its registration number is taken.
+    Deactivating it does not free the number.

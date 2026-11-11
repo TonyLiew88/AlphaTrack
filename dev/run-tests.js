@@ -267,6 +267,24 @@ step('Dataset: all 14 spec scenarios are covered', () => {
   if (gaps.length) throw new Error('not covered: ' + gaps.join(', '));
   return need.length + ' of 14';
 });
+step('Dataset: import refuses a half-uploaded or binned folder and registers nobody', () => {
+  dsRun('SEG_setupDatabase()');
+  return dsRun(`(function () {
+    const partial = DriveApp.createFolder('half uploaded');
+    __pdfs.slice(0, 5).forEach(function (p) { partial.createFile(Utilities.newBlob(Utilities.base64Decode(p.b64), 'application/pdf', p.name)); });
+    let msg = '';
+    try { M1_importDataset(partial.getId(), {}); } catch (e) { msg = e.message; }
+    if (!/not in the "half uploaded" folder yet/.test(msg) || !/Nothing was imported/.test(msg)) throw new Error('partial folder: ' + msg);
+    const binned = DriveApp.createFolder('binned');
+    binned.setTrashed(true);
+    let msg2 = '';
+    try { M1_importDataset(binned.getId(), {}); } catch (e) { msg2 = e.message; }
+    if (!/bin/.test(msg2)) throw new Error('binned folder: ' + msg2);
+    const n = readTable(SEG.TABS.SUPPLIERS).length;
+    if (n) throw new Error(n + ' supplier(s) registered anyway');
+    return 'both refused before registering anyone';
+  })()`);
+});
 step('Dataset: import registers 7 suppliers and leaves BrightClean for the live demo', () => {
   dsRun('SEG_setupDatabase()');
   // Same as dragging the test-pdfs folder into My Drive: the whole tree, sub-folders included.
@@ -349,6 +367,21 @@ step('Overview: dashboard numbers match the Sheet', () => {
   if (o.documents.current !== current || o.documents.versions !== docs.length) throw new Error('documents ' + JSON.stringify(o.documents));
   if (o.coverage.uploaded > o.coverage.required || !o.activity.length || o.attention.length > 6) throw new Error(JSON.stringify({ coverage: o.coverage, activity: o.activity.length, attention: o.attention.length }));
   return o.suppliers.total + ' suppliers, ' + current + ' current documents, ' + o.coverage.uploaded + ' of ' + o.coverage.required + ' mandatory on file, ' + o.attentionTotal + ' need attention';
+});
+step('A tab keeps growing past its first 1000 rows (real Sheets refuse to write past the end)', () => {
+  return dsRun(`(function () {
+    const sheet = SEG_sheet(SEG.TABS.RUNS);
+    const before = readTable(SEG.TABS.RUNS).length;
+    const rows = [];
+    for (let i = 0; i < 1100; i++) rows.push({ run_id: 'RUN' + i, notes: 'growth test' });
+    appendRows(SEG.TABS.RUNS, rows.slice(0, 600));
+    appendRows(SEG.TABS.RUNS, rows.slice(600));
+    const after = readTable(SEG.TABS.RUNS).length;
+    if (after !== before + 1100) throw new Error(after + ' rows');
+    const grown = sheet.getMaxRows();
+    for (let i = 0; i < 1100; i++) sheet.deleteRow(sheet.getLastRow());
+    return '1100 rows written; the tab grew from 1000 to ' + grown + ' rows';
+  })()`);
 });
 step('Deactivate: monitoring stops, nothing is deleted, the Drive folder moves, and it can be undone', () => {
   return dsRun(`(function () {

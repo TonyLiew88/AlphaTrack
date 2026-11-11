@@ -107,6 +107,7 @@
   }
   function Sheet(name) {
     this.rows = [];
+    this.maxRows = 1000;
     this.getName = () => name;
     this.getLastRow = () => {
       let last = 0;
@@ -118,12 +119,20 @@
       this.rows.forEach((r) => r.forEach((c, i) => { if (c !== '' && c !== null && c !== undefined) last = Math.max(last, i + 1); }));
       return last;
     };
-    this.getMaxRows = () => Math.max(1000, this.rows.length);
+    this.getMaxRows = () => this.maxRows;
     this.getMaxColumns = () => 26;
-    this.getRange = (row, col, numRows, numCols) => new Range(this, row, col, numRows || 1, numCols || 1);
+    this.getRange = (row, col, numRows, numCols) => {
+      const n = numRows || 1;
+      const m = numCols || 1;
+      if (row < 1 || col < 1 || row + n - 1 > this.maxRows || col + m - 1 > 26) {
+        throw new Error('The coordinates of the range are outside the dimensions of the sheet. (mock: rows ' + row + '-' + (row + n - 1) + ' of ' + this.maxRows + ')');
+      }
+      return new Range(this, row, col, n, m);
+    };
+    this.insertRowsAfter = (after, howMany) => { this.rows.splice(after, 0, ...Array.from({ length: howMany }, () => [])); this.maxRows += howMany; return this; };
     this.getDataRange = () => this.getRange(1, 1, Math.max(1, this.getLastRow()), Math.max(1, this.getLastColumn()));
     this.setFrozenRows = () => this;
-    this.deleteRow = (row) => { this.rows.splice(row - 1, 1); return this; };
+    this.deleteRow = (row) => { this.rows.splice(row - 1, 1); this.maxRows -= 1; return this; };
   }
   const sheets = {};
   let sheetOrder = ['Sheet1'];

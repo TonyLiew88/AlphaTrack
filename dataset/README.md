@@ -83,6 +83,8 @@ Register BrightClean on stage instead of importing it. Its PDFs and the details 
 3. **Register.** The status becomes *Pending documents*.
 4. **Show the renewal.** Open the supplier, then use **Upload renewed version** on the Insurance Certificate with `BrightClean_Insurance_Certificate_2026-2027_RENEWAL.pdf` from `Step 2 - upload this later as the renewal`. Version 1 is kept in the history as replaced.
 
+**To record again,** run `M1_resetVideoDemo` in Apps Script. It removes BrightClean only (its Drive folder goes to the bin) and unlinks its answer-key rows, so you can register it again with the same PDFs. The other suppliers are untouched.
+
 To import BrightClean too (for example, for testing), run `M1_importDemoDatasetWithBrightClean` instead. It still leaves the renewal PDF for you to upload by hand.
 
 ## The answer key

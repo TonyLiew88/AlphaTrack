@@ -94,8 +94,29 @@ function M1_importDataset(folderId, options) {
     throw new Error('The dataset folder (' + folderId + ') can’t be opened. If DATASET_FOLDER_ID is set in Script properties, check it, ' +
       'or delete it so the "' + M1_DATASET_FOLDER_NAME + '" folder is found by name.');
   }
+  if (folder.isTrashed()) {
+    throw new Error('The dataset folder "' + folder.getName() + '" is in the Google Drive bin. Restore it, or drag ' + M1_DATASET_FOLDER_NAME +
+      ' into My Drive again (and delete DATASET_FOLDER_ID from Script properties if you set it). Nothing was imported.');
+  }
   const duplicates = [];
   const files = M1_datasetFiles(folder, {}, duplicates);
+
+  // Check every PDF is there BEFORE registering anyone. Otherwise a run made while Drive is still
+  // uploading would register suppliers with no documents, and a second run would skip them.
+  const registeredNos = readTable(SEG.TABS.SUPPLIERS).map((r) => SEG_cleanText(r.registration_no));
+  const absent = [];
+  M1_DATASET.suppliers.forEach((s) => {
+    if (s.liveDemo && !opts.includeLiveDemo) return;
+    if (registeredNos.indexOf(SEG_cleanText(s.info.registrationNo)) >= 0) return;
+    s.documents.forEach((doc) => {
+      if (doc.uploadLater && !opts.includeRenewals) return;
+      if (!files[doc.fileName]) absent.push(doc.fileName);
+    });
+  });
+  if (absent.length) {
+    throw new Error(absent.length + ' PDF(s) are not in the "' + folder.getName() + '" folder yet: ' + absent.join(', ') +
+      '. If you just dragged the folder into Drive, wait until the upload finishes, then run this again. Nothing was imported.');
+  }
 
   const report = [];
   if (duplicates.length) report.push('Found more than one file called: ' + duplicates.join(', ') + '. The first one found was used.');

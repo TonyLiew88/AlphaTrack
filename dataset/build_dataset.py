@@ -574,6 +574,9 @@ def write_readme(rows):
         f"4. **Show the renewal.** Open the supplier, then use **Upload renewed version** on the Insurance Certificate with "
         f"`BrightClean_Insurance_Certificate_2026-2027_RENEWAL.pdf` from `{DEMO_LATER_DIR.name}`. Version 1 is kept in the history as replaced.",
         "",
+        "**To record again,** run `M1_resetVideoDemo` in Apps Script. It removes BrightClean only (its Drive folder goes to the bin) and unlinks "
+        "its answer-key rows, so you can register it again with the same PDFs. The other suppliers are untouched.",
+        "",
         "To import BrightClean too (for example, for testing), run `M1_importDemoDatasetWithBrightClean` instead. It still leaves the renewal "
         "PDF for you to upload by hand.",
         "",
@@ -690,8 +693,11 @@ def write_people_guides():
         "",
         "Good to know",
         "  - The import and the local preview always leave BrightClean out, so you can do this live.",
-        "  - If BrightClean is already registered, AlphaTrack says the registration number is taken.",
-        "    Deactivating it does not free the number; use a fresh copy of the app (or the local preview) to record again.",
+        "  - To record again: open Apps Script, choose M1_resetVideoDemo and click Run.",
+        "    It removes BrightClean only (its Drive folder goes to the bin); the other 7 suppliers stay.",
+        "    BrightClean gets a new ID (for example SUP009) on the next take.",
+        "  - Without the reset, AlphaTrack refuses BrightClean because its registration number is taken.",
+        "    Deactivating it does not free the number.",
         "",
     ]
     DEMO_DIR.mkdir(parents=True, exist_ok=True)

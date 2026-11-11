@@ -515,15 +515,16 @@ function M1_saveSupplierDraft(payload) {
 /** Wizard step 5: submit the registration. Missing documents are allowed; the status says so. */
 function M1_registerSupplier(supplierId) {
   const master = M1_loadMasterData();
-  const supplier = M1_findSupplierRow(supplierId);
-  M1_assertNotDeactivated(supplier);
-  M1_assertValid(M1_validateInfo(M1_rowToInfo(supplier), 'submit', master, readTable(SEG.TABS.SUPPLIERS), supplierId));
-  const hasMandatory = readTable(SEG.TABS.SUPPLIER_REQS)
-    .some((r) => r.supplier_id === supplierId && SEG_bool(r.active, true) && SEG_bool(r.mandatory, false));
-  if (!hasMandatory) throw new Error('Add at least one mandatory document to the checklist before registering.');
-
-  const now = SEG_now();
-  updateRow(SEG.TABS.SUPPLIERS, supplier._row, { submitted_at: supplier.submitted_at || now, updated_at: now });
+  SEG_withLock(() => {
+    const supplier = M1_findSupplierRow(supplierId);
+    M1_assertNotDeactivated(supplier);
+    M1_assertValid(M1_validateInfo(M1_rowToInfo(supplier), 'submit', master, readTable(SEG.TABS.SUPPLIERS), supplierId));
+    const hasMandatory = readTable(SEG.TABS.SUPPLIER_REQS)
+      .some((r) => r.supplier_id === supplierId && SEG_bool(r.active, true) && SEG_bool(r.mandatory, false));
+    if (!hasMandatory) throw new Error('Add at least one mandatory document to the checklist before registering.');
+    const now = SEG_now();
+    updateRow(SEG.TABS.SUPPLIERS, supplier._row, { submitted_at: supplier.submitted_at || now, updated_at: now });
+  });
   const status = M1_refreshRegistrationStatus(supplierId);
   SEG_audit({
     module: 'M1', action: 'SUPPLIER_REGISTERED', recordType: 'SUPPLIER', recordId: supplierId, supplierId: supplierId,
@@ -558,22 +559,23 @@ function M1_updateSupplierInfo(supplierId, input) {
 /** Edit a supplier's document checklist after registration. */
 function M1_saveSupplierRequirements(supplierId, list) {
   const master = M1_loadMasterData();
-  const supplier = M1_findSupplierRow(supplierId);
-  M1_assertNotDeactivated(supplier);
   const requirements = M1_normaliseRequirements(list, master);
-  if (supplier.submitted_at && !requirements.some((r) => r.mandatory)) {
-    throw new Error('A registered supplier needs at least one mandatory document.');
-  }
   const summary = SEG_withLock(() => {
+    const supplier = M1_findSupplierRow(supplierId);
+    M1_assertNotDeactivated(supplier);
+    if (supplier.submitted_at && !requirements.some((r) => r.mandatory)) {
+      throw new Error('A registered supplier needs at least one mandatory document.');
+    }
     const result = M1_writeRequirements(supplierId, requirements);
     updateRow(SEG.TABS.SUPPLIERS, supplier._row, { updated_at: SEG_now() });
+    result.submitted = !!supplier.submitted_at;
     return result;
   });
   SEG_audit({
     module: 'M1', action: 'REQUIREMENTS_UPDATED', recordType: 'SUPPLIER', recordId: supplierId, supplierId: supplierId, outcome: 'OK',
     reason: summary.added + ' added, ' + summary.updated + ' kept or changed, ' + summary.removed + ' removed.'
   });
-  if (supplier.submitted_at) M1_refreshRegistrationStatus(supplierId);
+  if (summary.submitted) M1_refreshRegistrationStatus(supplierId);
   return M1_getSupplierDetail(supplierId);
 }
 

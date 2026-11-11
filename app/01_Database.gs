@@ -139,7 +139,16 @@ function appendRows(name, objects) {
   const sheet = SEG_sheet(name);
   const headers = SEG_headersOf(sheet);
   const rows = objects.map((o) => headers.map((h) => SEG_toCell(o[h])));
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
+  const start = sheet.getLastRow() + 1;
+  const short = start + rows.length - 1 - sheet.getMaxRows();
+  if (short > 0) {
+    // A new tab has 1000 rows, and writing past the last one fails. Add room, 500 rows at a time,
+    // formatted as plain text like the rest of the tab.
+    const before = sheet.getMaxRows();
+    sheet.insertRowsAfter(before, Math.max(short, 500));
+    sheet.getRange(before + 1, 1, sheet.getMaxRows() - before, Math.max(1, headers.length)).setNumberFormat('@');
+  }
+  sheet.getRange(start, 1, rows.length, headers.length).setValues(rows);
 }
 
 /** Changes some cells of one row. changes = { column_name: value, ... } */
