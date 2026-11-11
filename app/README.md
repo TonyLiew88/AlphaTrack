@@ -67,6 +67,26 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
 
 What happens for each case is described in [handoff/MEMBER-4-NOTIFICATIONS.md](../handoff/MEMBER-4-NOTIFICATIONS.md).
 
+## Updating the team's web app link
+
+There is **one** team link: the deployment called **AlphaTrack prototype**. It shows a saved *version* of the code, not the latest edits. Saving or `clasp push` changes the code, but not what the link shows.
+
+**To publish your changes to the team link:**
+1. Get everyone's latest files first: `git pull`.
+2. Push your code: `clasp push`. In the browser editor, just save instead.
+3. In the editor, click **Deploy → Manage deployments**.
+4. Select **AlphaTrack prototype**, then click the pencil icon.
+5. Set **Version: New version**, then click **Deploy**.
+6. Push your commit to GitHub.
+
+Please **don't** use *Deploy → New deployment*. It makes a separate link (set to "Only myself" by default) that nobody else sees. To try unpublished code yourself, use **Deploy → Test deployments**.
+
+With clasp, steps 3–5 are one command:
+
+```bash
+clasp update-deployment AKfycbzRA0AfWYA-rIFDVCkerVfsdX8LAlpqrKo2tSTNrxUUSTpGcvuq4JaDump57EexwhdA9w --description "AlphaTrack prototype"
+```
+
 ## What Member 1's page does (spec section 6)
 
 | Spec feature | Where it is |
