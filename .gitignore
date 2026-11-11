@@ -5,8 +5,7 @@ dev/preview.html
 apps-script/
 sample-data/
 
-# Local tools and temporary files
-.claude/
+# Local temporary files
 __pycache__/
 *.tmp.png
 ~$*

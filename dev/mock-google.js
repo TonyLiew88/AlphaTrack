@@ -181,7 +181,9 @@
             parent = dest;
             return file;
           },
-          setTrashed: () => file
+          trashed: false,
+          isTrashed: () => file.trashed,
+          setTrashed: (v) => { file.trashed = !!v; return file; }
         };
         files[fid] = file;
         folder.files.push(file);
@@ -189,7 +191,9 @@
       },
       getFolders: () => iterate(folder.children),
       getFiles: () => iterate(folder.files),
-      setTrashed: () => folder
+      trashed: false,
+      isTrashed: () => folder.trashed,
+      setTrashed: (v) => { folder.trashed = !!v; return folder; }
     };
     folders[id] = folder;
     return folder;

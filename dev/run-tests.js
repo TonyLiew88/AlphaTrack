@@ -171,6 +171,52 @@ step('Every Member 1 action reached the audit log', () => {
   return actions.length + ' entries';
 });
 
+step('A supplier folder someone moved to the Drive bin is restored, not filled from the bin', () => {
+  return run(`(function () {
+    const s = readTable(SEG.TABS.SUPPLIERS).find(r => r.supplier_name.indexOf('BrightClean') === 0);
+    const folder = DriveApp.getFolderById(s.drive_folder_id);
+    folder.setTrashed(true);
+    const certs = folder.getFoldersByName('3. Certificates & Insurance').next();
+    const d = M1_getSupplierDetail(s.supplier_id);
+    const req = d.requirements.find(r => r.docTypeId === 'BUSINESS_REGISTRATION_RECORD');
+    certs.setTrashed(true);
+    M1_uploadDocument({ supplierId: s.supplier_id, requirementId: req.requirementId, fileName: 'brr.pdf', mimeType: 'application/pdf',
+      base64: DEV_makePdf(['SIMULATED DOCUMENT - FOR HACKATHON TESTING ONLY', 'Business registration record (bin test)']) });
+    if (folder.isTrashed()) throw new Error('supplier folder still in the bin');
+    const logged = readTable(SEG.TABS.AUDIT).some(a => a.action === 'DRIVE_FOLDER_RESTORED' && a.supplier_id === s.supplier_id);
+    if (!logged) throw new Error('restore not in the audit log');
+    const again = M1_documentFolder(folder, 'CERTIFICATE', false);
+    if (again.isTrashed()) throw new Error('class folder still in the bin');
+    return 'restored and logged';
+  })()`);
+});
+step('A folder that cannot be opened stops with a clear message instead of making a new one', () => {
+  return run(`(function () {
+    const s = readTable(SEG.TABS.SUPPLIERS).find(r => r.supplier_name.indexOf('SecureGuard') === 0);
+    const realId = s.drive_folder_id;
+    updateRow(SEG.TABS.SUPPLIERS, s._row, { drive_folder_id: 'FOLDER-NOBODY-CAN-OPEN' });
+    const d = M1_getSupplierDetail(s.supplier_id);
+    let message = '';
+    try {
+      M1_uploadDocument({ supplierId: s.supplier_id, requirementId: d.requirements[0].requirementId, fileName: 'x.pdf', mimeType: 'application/pdf',
+        base64: DEV_makePdf(['SIMULATED DOCUMENT - FOR HACKATHON TESTING ONLY', 'unreachable folder test']) });
+    } catch (e) { message = e.message; }
+    const after = readTable(SEG.TABS.SUPPLIERS).find(r => r.supplier_id === s.supplier_id).drive_folder_id;
+    updateRow(SEG.TABS.SUPPLIERS, s._row, { drive_folder_id: realId });
+    if (!/can’t be opened/.test(message)) throw new Error('message: ' + message);
+    if (after !== 'FOLDER-NOBODY-CAN-OPEN') throw new Error('folder ID was replaced with ' + after);
+    const props = PropertiesService.getScriptProperties();
+    const root = props.getProperty('DRIVE_ROOT_FOLDER_ID');
+    props.setProperty('DRIVE_ROOT_FOLDER_ID', 'ROOT-NOBODY-CAN-OPEN');
+    let rootMessage = '';
+    try { SEG_rootFolder(); } catch (e) { rootMessage = e.message; }
+    const rootAfter = props.getProperty('DRIVE_ROOT_FOLDER_ID');
+    props.setProperty('DRIVE_ROOT_FOLDER_ID', root);
+    if (!/can’t be opened/.test(rootMessage) || rootAfter !== 'ROOT-NOBODY-CAN-OPEN') throw new Error('root: ' + rootMessage + ' / ' + rootAfter);
+    return 'supplier and root folder IDs kept; clear error shown';
+  })()`);
+});
+
 /* ------------------------------------------------- The fictional test dataset (fresh database) */
 const ds = vm.createContext({ console: { log: (...a) => logs.push(a.join(' ')), warn: (...a) => logs.push('WARN ' + a.join(' ')), error: (...a) => logs.push('ERROR ' + a.join(' ')) } });
 const dsLoad = (file, name) => vm.runInContext(fs.readFileSync(file, 'utf8'), ds, { filename: name });

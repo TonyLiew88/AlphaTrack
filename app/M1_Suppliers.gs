@@ -837,11 +837,8 @@ function M1_writeRequirements(supplierId, requirements) {
 function M1_ensureSupplierFolder(supplierId, knownRow) {
   const row = knownRow || M1_findSupplierRow(supplierId);
   if (row.drive_folder_id) {
-    try {
-      return DriveApp.getFolderById(row.drive_folder_id);
-    } catch (err) {
-      console.warn('Folder for ' + supplierId + ' is not reachable; creating a new one.');
-    }
+    return SEG_openFolder(row.drive_folder_id, 'The Drive folder for ' + supplierId,
+      'drive_folder_id for ' + supplierId + ' in the Suppliers tab', supplierId);
   }
   const name = (supplierId + ' - ' + String(row.supplier_name || '')).replace(/[\\/:*?"<>|]/g, ' ').trim();
   const folder = SEG_rootFolder().createFolder(name);
@@ -862,9 +859,20 @@ function M1_documentFolder(supplierFolder, documentClass, oldVersion) {
   return oldVersion ? M1_childFolder(classFolder, M1_DRIVE_FOLDERS.OLD_VERSIONS) : classFolder;
 }
 
+/** Finds a sub-folder by name, skipping (or, if it's the only one, restoring) any copy in the Drive bin. */
 function M1_childFolder(parent, name) {
   const found = parent.getFoldersByName(name);
-  return found.hasNext() ? found.next() : parent.createFolder(name);
+  let binned = null;
+  while (found.hasNext()) {
+    const folder = found.next();
+    if (!folder.isTrashed()) return folder;
+    binned = binned || folder;
+  }
+  if (binned) {
+    binned.setTrashed(false);
+    return binned;
+  }
+  return parent.createFolder(name);
 }
 
 /** Member 2's tab may not have rows yet; treat any problem as "nothing extracted". */

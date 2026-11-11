@@ -75,15 +75,35 @@ function SEG_sheet(name) {
 function SEG_rootFolder() {
   const props = PropertiesService.getScriptProperties();
   const id = props.getProperty('DRIVE_ROOT_FOLDER_ID');
-  if (id) {
-    try {
-      return DriveApp.getFolderById(id);
-    } catch (err) {
-      console.warn('Saved Drive folder ' + id + ' is not reachable; creating a new one.');
-    }
-  }
+  if (id) return SEG_openFolder(id, 'The main supplier documents folder', 'the DRIVE_ROOT_FOLDER_ID script property', '');
   const folder = DriveApp.createFolder(SEG.ROOT_FOLDER_NAME);
   props.setProperty('DRIVE_ROOT_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+/**
+ * Opens a folder the app saved earlier.
+ * - In the Drive bin: it is restored and the restore is logged, so documents never sit in the bin.
+ * - Can't be opened at all (no access, or deleted for good): stops with a clear message instead of
+ *   quietly making a replacement, which would split one supplier's documents across folders or
+ *   move the shared folder into whoever happened to run the code.
+ */
+function SEG_openFolder(id, what, whereStored, supplierId) {
+  let folder;
+  try {
+    folder = DriveApp.getFolderById(id);
+  } catch (err) {
+    throw new Error(what + ' (Drive folder ' + id + ') can’t be opened by ' + SEG_currentUser() + '. Ask its owner to share it ' +
+      'with you, or run this from the account that set the app up. If the folder was deleted for good, clear ' + whereStored +
+      ' and try again, and a new folder will be created.');
+  }
+  if (folder.isTrashed()) {
+    folder.setTrashed(false);
+    SEG_audit({
+      module: 'SYSTEM', action: 'DRIVE_FOLDER_RESTORED', recordType: 'FOLDER', recordId: id, supplierId: supplierId || '',
+      outcome: 'RESTORED', reason: what + ' was in the Drive bin. It has been restored so its documents are kept.'
+    });
+  }
   return folder;
 }
 
