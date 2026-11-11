@@ -46,6 +46,19 @@ function M1_datasetFolderId() {
     'script property DATASET_FOLDER_ID with the ID of the right one (Project Settings > Script properties).');
 }
 
+/**
+ * Recognises a test-dataset supplier in the Suppliers tab: same registration number, or the same
+ * company name ignoring "Sdn. Bhd." / "Berhad", spaces and punctuation. So a practice registration
+ * typed as "BrightClean" with any registration number still counts as the demo's BrightClean.
+ */
+function M1_isDatasetSupplier(datasetSuppliers) {
+  const core = (name) => SEG_cleanText(String(name || '').replace(/\b(sdn\.?\s*bhd\.?|berhad)\b/gi, ''));
+  const regNos = datasetSuppliers.map((s) => SEG_cleanText(s.info.registrationNo));
+  const names = datasetSuppliers.map((s) => core(s.info.supplierName));
+  return (row) => regNos.indexOf(SEG_cleanText(row.registration_no)) >= 0 ||
+    (core(row.supplier_name) !== '' && names.indexOf(core(row.supplier_name)) >= 0);
+}
+
 /** Every file in the folder and all its sub-folders, by name. Files in the bin are skipped. */
 function M1_datasetFiles(folder, files, duplicates) {
   const list = folder.getFiles();
@@ -70,11 +83,11 @@ function M1_datasetFiles(folder, files, duplicates) {
  * again from the test-pdfs folder. Suppliers you registered yourself are kept.
  */
 function M1_restartDemoData() {
-  const regNos = M1_DATASET.suppliers.map((s) => SEG_cleanText(s.info.registrationNo));
+  const isDemo = M1_isDatasetSupplier(M1_DATASET.suppliers);
   const isTest = (s) => /^TEST /.test(String(s.supplier_name)) && /^TEST-/.test(String(s.registration_no));
   // Check the PDFs are reachable first, so a missing folder can't leave you with nothing.
   M1_datasetFolderId();
-  M1_removeSuppliersForTesting((s) => regNos.indexOf(SEG_cleanText(s.registration_no)) >= 0 || isTest(s), 'demo', true);
+  M1_removeSuppliersForTesting((s) => isDemo(s) || isTest(s), 'demo', true);
   readTable(SEG.TABS.GROUND_TRUTH)
     .filter((r) => r.supplier_id || r.doc_id)
     .forEach((r) => updateRow(SEG.TABS.GROUND_TRUTH, r._row, { supplier_id: '', doc_id: '' }));
@@ -88,9 +101,8 @@ function M1_restartDemoData() {
  */
 function M1_resetVideoDemo() {
   const demo = M1_DATASET.suppliers.filter((s) => s.liveDemo);
-  const regNos = demo.map((s) => SEG_cleanText(s.info.registrationNo));
   const names = demo.map((s) => s.info.supplierName);
-  const removed = M1_removeSuppliersForTesting((s) => regNos.indexOf(SEG_cleanText(s.registration_no)) >= 0, 'video demo');
+  const removed = M1_removeSuppliersForTesting(M1_isDatasetSupplier(demo), 'video demo');
   readTable(SEG.TABS.GROUND_TRUTH)
     .filter((r) => names.indexOf(r.supplier_name) >= 0 && (r.supplier_id || r.doc_id))
     .forEach((r) => updateRow(SEG.TABS.GROUND_TRUTH, r._row, { supplier_id: '', doc_id: '' }));

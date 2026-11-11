@@ -505,11 +505,13 @@ step('Restarting the demo data numbers the suppliers from SUP001 again and keeps
     }
     if (docs.map(d => d.doc_id).sort()[0] !== 'DOC001') throw new Error('documents start at ' + docs.map(d => d.doc_id).sort()[0]);
     const mine = M1_saveSupplierDraft({ info: { supplierName: 'My Own Supplier Sdn. Bhd.', registrationNo: 'MINE-1' } }).supplier.supplierId;
+    const practice = M1_saveSupplierDraft({ info: { supplierName: 'BrightClean', registrationNo: 'PRACTICE-9' } }).supplier.supplierId;
     M1_restartDemoData();
+    if (readTable(SEG.TABS.SUPPLIERS).some(s => s.supplier_name === 'BrightClean')) throw new Error('the practice "BrightClean" (' + practice + ') was kept');
     const list = readTable(SEG.TABS.SUPPLIERS);
     if (!list.some(s => s.supplier_id === mine) || list.length !== 8) throw new Error('your own supplier ' + mine + ' was not kept');
     M1_removeSuppliersForTesting(s => s.supplier_id === mine, 'mine');
-    return 'suppliers SUP001-SUP007, documents from DOC001, answer key re-linked; your own supplier ' + mine + ' survives a restart';
+    return 'suppliers SUP001-SUP007, documents from DOC001, answer key re-linked; your own supplier ' + mine + ' survives a restart; a practice "BrightClean" with another registration number is removed';
   })()`);
 });
 
