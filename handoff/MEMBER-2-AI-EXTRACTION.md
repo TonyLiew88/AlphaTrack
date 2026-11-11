@@ -17,7 +17,7 @@ Nobody uploads a PDF twice. You get the Drive file ID and read the file yourself
    - the Drive folder **AlphaTrack - Supplier Documents**.
 2. Open the Sheet, then **Extensions → Apps Script**. This is the shared project, and every member's files live in it.
 3. Only edit **your own files** (below). If you need a change in `00_Config.gs` or `01_Database.gs`, ask Member 5. When two people save the same file, the last save wins.
-4. To try the app as yourself, use **Deploy → Test deployments** and open the **Web app** URL. It runs your latest saved code under your own account.
+4. To try the app, open the team's web app link (it works for any Google account). To try code you haven't deployed yet, use **Deploy → Test deployments** and open the **Web app** URL: it runs the latest saved code under your own account.
 
 ## 2. Your files
 

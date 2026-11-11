@@ -45,7 +45,8 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
    5. To start all the demo data again, numbered from `SUP001`, run `M1_restartDemoData` (in `M1_DemoDataset.gs`). It removes the dataset suppliers (BrightClean too) and any TEST supplier, then imports `test-pdfs` again. Suppliers you registered yourself are kept.
 
    Only if Drive has more than one `test-pdfs` folder: add the script property `DATASET_FOLDER_ID` with the right folder's ID.
-8. **Deploy.** Click **Deploy → New deployment**, choose the type **Web app**, keep **Execute as: Me** and **Who has access: Only myself**, then click **Deploy**. Open the web app URL it gives you.
+8. **Deploy.** Click **Deploy → New deployment**, choose the type **Web app**, keep **Execute as: Me**, set **Who has access: Anyone with Google account**, then click **Deploy**. Open the web app URL it gives you.
+   - Anyone signed in to Google who has the link (teammates, judges) can use the app. It runs as you, so they don't need access to the Sheet or the Drive folder. With **Only myself**, everyone else sees "Sorry, unable to open the file at present".
    - While developing, **Deploy → Test deployments** gives a URL that always runs your latest saved code.
 9. **Share it with a teammate (for example Member 2).** They need **Editor** access to two things:
    - the Sheet (this also shares the Apps Script project and its Script properties);
