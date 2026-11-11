@@ -1,0 +1,364 @@
+<script>
+/**
+ * M2_Client · Member 2: AI Document Analysis (browser side)
+ * Lists every current document with what Gemini read, its issues and status.
+ * A row opens the details: the fields, the issues explained, the PDF link,
+ * Re-analyse (read the same file again) and Correct (an officer fixes fields).
+ * Talks to M2_Extraction.gs through App.api(). Must be included after OverviewClient,
+ * because registering the 'ai' page here replaces the "coming next" placeholder.
+ */
+(() => {
+  const E = App.esc;
+  const I = App.icon;
+  const byId = (id) => document.getElementById(id);
+
+  const STATES = {
+    OK: { label: 'Read', chip: 'ex-ok', icon: 'checkCircle', tone: 'tone-ok', foot: 'Read by AI, nothing to check' },
+    REVIEW: { label: 'Needs review', chip: 'st-pending-docs', icon: 'alert', tone: 'tone-warn', foot: 'A person should look at these' },
+    FAILED: { label: 'Failed', chip: 'ex-bad', icon: 'xCircle', tone: 'tone-danger', foot: 'Could not be read; see the reason' },
+    WAITING: { label: 'Waiting for AI', chip: 'ex-queued', icon: 'clock', tone: 'tone-info', foot: 'Uploaded, not read yet' }
+  };
+  const STATE_ORDER = ['OK', 'REVIEW', 'FAILED', 'WAITING'];
+  const CLASS_LABEL = { CONTRACT: 'Contract', LICENCE: 'Licence', CERTIFICATE: 'Certificate' };
+  const CLASS_ICON = { CONTRACT: 'contract', LICENCE: 'licence', CERTIFICATE: 'certificate' };
+  const DATE_FIELDS = ['issue_date', 'start_date', 'due_date'];
+  const READ_BATCH = 3; // documents per server call, so a click never hits the 6-minute limit
+
+  const st = { data: null, loading: null, bound: false, filter: { q: '', state: '', cls: '' }, running: false };
+
+  App.registerPage('ai', { show() { bindEvents(); load(); } });
+
+  /* ---------------------------------------------------------------- Helpers */
+
+  function tok(v) { return String(v === undefined || v === null ? '' : v).replace(/[^A-Za-z0-9_-]/g, ''); }
+  function safeUrl(u) { return /^(https:\/\/|blob:)/i.test(String(u || '')) ? String(u) : '#'; }
+  function chip(cls, text, dot) { return '<span class="chip ' + cls + (dot ? ' chip-dot' : '') + '">' + E(text) + '</span>'; }
+  function stateChip(s) { const x = STATES[s] || STATES.WAITING; return chip(x.chip, x.label, true); }
+  function issueChip(i) {
+    return chip(i.effect === 'INFO' ? 'chip-neutral' : (i.effect === 'FAILED' ? 'ex-bad' : 'st-pending-docs'), words(i.code));
+  }
+  function words(code) { const s = String(code || '').toLowerCase().replace(/_/g, ' '); return s.charAt(0).toUpperCase() + s.slice(1); }
+  function classTile(c) {
+    return '<span class="tile-icon tone-' + (tok(c) || 'neutral') + '" style="width:30px;height:30px">' + I(CLASS_ICON[c] || 'file', 16) + '</span>';
+  }
+  function fieldLabel(name, docClass) {
+    if (name === 'due_date') return docClass === 'CONTRACT' ? 'End date' : 'Expiry date';
+    return {
+      holder_name: docClass === 'CONTRACT' ? 'Supplier (party)' : 'Holder (company)', client_name: 'Client',
+      document_no: docClass === 'CONTRACT' ? 'Agreement number' : 'Document number', issuing_body: 'Issued by',
+      issue_date: 'Issue date', start_date: 'Start date', renewal_notice_days: 'Renewal notice (days)',
+      auto_renewal: 'Renews automatically', scope: 'Scope'
+    }[name] || name;
+  }
+  function showValue(name, value) {
+    if (value === null || value === undefined || value === '') return '<span class="m2-empty-value">Not found</span>';
+    if (DATE_FIELDS.indexOf(name) >= 0) return E(App.fmtDate(value)) + ' <span class="cell-sub">(' + E(value) + ')</span>';
+    if (name === 'auto_renewal') return value === 'YES' ? 'Yes' : 'No';
+    return E(value);
+  }
+  function keyDetails(d) {
+    // Say why a cell is empty, so an empty cell never looks like a bug.
+    if (d.issues.some((i) => i.code === 'UNREADABLE')) {
+      return '<span class="cell-sub">Too blurry to read. Nothing was guessed; a person should check it.</span>';
+    }
+    if (d.state === 'FAILED') return '<span class="cell-sub">Not read: see the reason inside.</span>';
+    const due = d.fields.due_date;
+    const parts = [];
+    if (d.fields.holder_name) parts.push(E(d.fields.holder_name));
+    if (d.fields.document_no) parts.push(E(d.fields.document_no));
+    const dueText = due ? fieldLabel('due_date', d.documentClass) + ' ' + E(App.fmtDate(due))
+      : (d.conflictingDates.length ? fieldLabel('due_date', d.documentClass) + ': ' + d.conflictingDates.length + ' different dates printed' : '');
+    return (parts.length ? '<div class="cell-main" style="font-weight:500">' + parts.join(' · ') + '</div>' : '') +
+      (dueText ? '<div class="cell-sub">' + dueText + '</div>' : (d.state === 'WAITING' ? '<span class="cell-sub">Not read yet</span>' : ''));
+  }
+  function find(docId) { return st.data && st.data.documents.find((d) => d.docId === docId); }
+
+  /* ---------------------------------------------------------------- Loading */
+
+  async function load() {
+    if (st.loading) return st.loading;
+    if (!st.data) byId('m2-table').innerHTML = '<div class="card-pad"><div class="skeleton" style="height:180px"></div></div>';
+    st.loading = App.api('M2_getAnalysisPage')
+      .then((data) => { st.data = data; render(); })
+      .catch((err) => {
+        byId('m2-table').innerHTML = '<div class="empty"><span class="empty-art tone-danger">' + I('xCircle', 28) + '</span>' +
+          '<h3>Couldn’t load the AI analysis</h3><p>' + E(err.message) + '</p></div>';
+      })
+      .finally(() => { st.loading = null; });
+    return st.loading;
+  }
+
+  /* ---------------------------------------------------------------- Rendering */
+
+  function render() {
+    renderBanner();
+    renderTiles();
+    renderTable();
+    const waiting = st.data.counts.waiting;
+    const run = byId('m2-run');
+    run.disabled = st.running || !waiting || !st.data.keySet;
+    if (!st.running) run.innerHTML = I('sparkles', 16) + (waiting ? 'Read ' + waiting + ' waiting document' + (waiting === 1 ? '' : 's') : 'Nothing waiting');
+  }
+
+  function renderBanner() {
+    const box = byId('m2-banner');
+    box.innerHTML = st.data.keySet ? '' :
+      '<div class="callout warn">' + I('alert', 18) + '<div><strong>The Gemini API key is not set.</strong> In the Apps Script editor open ' +
+      'Project Settings → Script properties and add <code>GEMINI_API_KEY</code>. Documents stay queued until then.</div></div>';
+  }
+
+  function renderTiles() {
+    const box = byId('m2-tiles');
+    const c = st.data.counts;
+    const n = { OK: c.ok, REVIEW: c.review, FAILED: c.failed, WAITING: c.waiting };
+    box.innerHTML = STATE_ORDER.map((s, i) => {
+      const meta = STATES[s];
+      return '<button type="button" class="tile" data-state="' + s + '" aria-pressed="' + (st.filter.state === s) + '" style="--i:' + i + '">' +
+        '<span class="tile-top"><span class="tile-label">' + E(meta.label) + '</span><span class="tile-icon ' + meta.tone + '">' + I(meta.icon, 18) + '</span></span>' +
+        '<span class="tile-value" data-count="' + n[s] + '">' + n[s] + '</span><span class="tile-foot">' + E(meta.foot) + '</span></button>';
+    }).join('');
+    if (!box.dataset.animated) {
+      box.dataset.animated = '1';
+      box.classList.add('stagger');
+      App.countUp(box);
+    }
+  }
+
+  function renderTable() {
+    const f = st.filter;
+    const q = f.q.trim().toLowerCase();
+    const all = st.data.documents;
+    const rank = { REVIEW: 0, FAILED: 1, WAITING: 2, OK: 3 };
+    const rows = all.filter((d) =>
+      (!f.state || d.state === f.state) && (!f.cls || d.documentClass === f.cls) &&
+      (!q || [d.supplierName, d.docTypeName, d.fileName, d.docId, d.fields.document_no, d.fields.holder_name]
+        .some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)))
+      .sort((a, b) => (rank[a.state] - rank[b.state]) || String(a.supplierName).localeCompare(b.supplierName));
+    byId('m2-count').textContent = rows.length + ' of ' + all.length + ' documents';
+
+    if (!all.length) {
+      byId('m2-table').innerHTML = '<div class="empty enter"><span class="empty-art tone-brand">' + I('sparkles', 28) + '</span>' +
+        '<h3>No documents to analyse yet</h3><p>Upload documents in Suppliers &amp; Documents. They appear here by themselves.</p>' +
+        '<button type="button" class="btn btn-secondary" data-goto="suppliers">Go to Suppliers &amp; Documents</button></div>';
+      return;
+    }
+    if (!rows.length) {
+      byId('m2-table').innerHTML = '<div class="empty enter"><span class="empty-art tone-neutral">' + I('search', 28) + '</span>' +
+        '<h3>No documents match these filters</h3><button type="button" class="btn btn-secondary" data-m2-clear>Clear filters</button></div>';
+      return;
+    }
+    byId('m2-table').innerHTML = '<table class="data"><caption class="visually-hidden">Documents and what the AI read</caption><thead><tr>' +
+      '<th scope="col">Document</th><th scope="col">Supplier</th><th scope="col">What the AI read</th>' +
+      '<th scope="col">Issues</th><th scope="col">Result</th></tr></thead><tbody class="stagger">' +
+      rows.map((d, i) => '<tr class="clickable" data-doc="' + E(d.docId) + '" style="--i:' + Math.min(i, 12) + '">' +
+        '<td><div class="who">' + classTile(d.documentClass) + '<div>' +
+          '<button type="button" class="link-btn" data-doc="' + E(d.docId) + '">' + E(d.docTypeName) + '</button>' +
+          '<div class="cell-sub">' + E(d.docId) + ' · ' + E(CLASS_LABEL[d.documentClass] || d.documentClass) + (d.version > 1 ? ' · version ' + d.version : '') + '</div></div></div></td>' +
+        '<td>' + E(d.supplierName) + '<div class="cell-sub">' + E(d.supplierId) + '</div></td>' +
+        '<td>' + keyDetails(d) + '</td>' +
+        '<td><div class="m2-chips">' + (d.issues.length ? d.issues.map(issueChip).join('') : (d.state === 'WAITING' ? '' : '<span class="cell-sub">None</span>')) + '</div></td>' +
+        '<td><div class="cell-split">' + stateChip(d.state) + (d.processingStatus === 'CORRECTED' ? chip('chip-neutral', 'Corrected') : '') +
+          '<span class="row-go">' + I('chevronRight', 16) + '</span></div></td></tr>').join('') +
+      '</tbody></table>';
+  }
+
+  /* ---------------------------------------------------------------- Details */
+
+  function detailBody(d) {
+    const neverRead = d.state === 'FAILED';
+    const issues = neverRead
+      ? '<p class="callout neutral">' + I('info', 18) + '<span>No result yet. Fix the reason above, then use Re-analyse.</span></p>'
+      : d.issues.length
+      ? '<ul class="m2-issues">' + d.issues.map((i) =>
+          '<li class="callout ' + (i.effect === 'INFO' ? 'neutral' : (i.effect === 'FAILED' ? 'warn' : 'warn')) + '">' +
+          I(i.effect === 'INFO' ? 'info' : 'alert', 18) + '<div><strong>' + E(words(i.code)) + '.</strong> ' + E(i.meaning) +
+          issueExtra(i.code, d) + '</div></li>').join('') + '</ul>'
+      : (d.state === 'WAITING'
+        ? '<p class="callout info">' + I('clock', 18) + '<span>Not read yet. Use <strong>Read waiting documents</strong> or Re-analyse.</span></p>'
+        : '<p class="callout ok">' + I('checkCircle', 18) + '<span>No issues. The details match the supplier register.</span></p>');
+
+    const fields = '<dl class="m2-fields">' + d.fieldNames.map((name) => {
+      let extra = '';
+      if (d.uncertainFields.indexOf(name) >= 0) extra += '<span class="m2-flag">' + I('alert', 14) + 'AI unsure</span>';
+      if (d.invalidValues[name]) extra += '<span class="m2-flag bad">' + I('xCircle', 14) + 'Not a real date: ' + E(d.invalidValues[name]) + '</span>';
+      if (name === 'holder_name' && d.issues.some((i) => i.code === 'NAME_MISMATCH')) {
+        extra += '<div class="m2-compare">Registered as: <strong>' + E(d.supplierName) + '</strong></div>';
+      }
+      return '<dt>' + E(fieldLabel(name, d.documentClass)) + '</dt><dd>' + showValue(name, d.fields[name]) + extra + '</dd>';
+    }).join('') + '</dl>';
+
+    const meta = [];
+    if (d.extractedAt) meta.push((neverRead ? 'Last try ' : 'Read ') + E(App.fmtDateTime(d.extractedAt)) + (d.model ? ' with ' + E(d.model) : ''));
+    if (d.correctedBy) meta.push('Corrected by ' + E(d.correctedBy) + ' on ' + E(App.fmtDateTime(d.correctedAt)));
+    if (d.readings > 1) meta.push(d.readings + ' readings of this file kept as history');
+    meta.push('File: ' + E(d.fileName));
+
+    return '<div class="detail-chips m2-chips">' + stateChip(d.state) + chip('cls-' + tok(d.documentClass), CLASS_LABEL[d.documentClass] || d.documentClass) +
+        chip('chip-neutral', d.supplierName) + '</div>' +
+      (d.error ? '<p class="callout warn m2-section">' + I('xCircle', 18) + '<span><strong>Why it failed:</strong> ' + E(d.error) +
+        (d.gaveUp ? ' It failed 3 times, so it is no longer retried by itself. Fix the cause, then use Re-analyse.' : '') + '</span></p>' : '') +
+      (d.lastAttemptError ? '<p class="callout neutral m2-section">' + I('info', 18) + '<span><strong>The latest re-read failed:</strong> ' +
+        E(d.lastAttemptError) + ' The result below is from the earlier good reading.</span></p>' : '') +
+      '<div class="m2-section"><h3>Issues</h3>' + issues + '</div>' +
+      (neverRead ? '' : '<div class="m2-section"><h3>What the AI read</h3>' + fields + '</div>') +
+      (d.aiNotes ? '<p class="callout neutral m2-section">' + I('sparkles', 18) + '<span><strong>AI note:</strong> ' + E(d.aiNotes) + '</span></p>' : '') +
+      (d.correctionNote ? '<p class="callout neutral m2-section">' + I('edit', 18) + '<span><strong>Correction note:</strong> ' + E(d.correctionNote) + '</span></p>' : '') +
+      '<div class="m2-meta">' + meta.map((m) => '<span>' + m + '</span>').join('') +
+        (safeUrl(d.fileUrl) !== '#' ? '<a href="' + E(safeUrl(d.fileUrl)) + '" target="_blank" rel="noopener">' + I('external', 14) + ' Open the PDF</a>' : '') + '</div>';
+  }
+
+  function issueExtra(code, d) {
+    if (code === 'CONFLICTING_DATES' && d.conflictingDates.length) {
+      return ' Dates found: ' + d.conflictingDates.map((x) => E(App.fmtDate(x))).join(', ') + '. Correct the right one.';
+    }
+    if (code === 'NAME_MISMATCH') return ' Document: “' + E(d.fields.holder_name) + '”. Register: “' + E(d.supplierName) + '”.';
+    return '';
+  }
+
+  function openDetail(docId) {
+    const d = find(docId);
+    if (!d) return;
+    App.modal({
+      title: d.docTypeName + ' · ' + d.docId,
+      wide: true,
+      body: detailBody(d),
+      actions: [
+        { label: 'Close', kind: 'secondary' },
+        { label: 'Re-analyse', kind: 'secondary', busyLabel: 'Reading…', onClick: () => reanalyse(d) },
+        { label: 'Correct fields', kind: 'primary', onClick: () => { setTimeout(() => openCorrect(d.docId), 200); } }
+      ]
+    });
+  }
+
+  async function reanalyse(d) {
+    const ok = await App.confirm('Read “' + d.fileName + '” again with Gemini? The earlier result stays in the history.', 'Re-analyse');
+    if (!ok) return false;
+    const out = await App.api('M2_pageReanalyse', d.docId);
+    st.data = out.page;
+    render();
+    const r = out.result;
+    App.toast(r.processingStatus === 'FAILED' ? 'Reading failed: ' + r.message
+      : 'Read again: ' + (r.issues.length ? r.issues.map(words).join(', ') : 'no issues') + '.', r.processingStatus === 'FAILED' ? 'error' : 'ok');
+    setTimeout(() => openDetail(d.docId), 220);
+  }
+
+  /* ---------------------------------------------------------------- Correction */
+
+  function openCorrect(docId) {
+    const d = find(docId);
+    if (!d) return;
+    const input = (name) => {
+      const id = 'm2-f-' + tok(name);
+      const v = d.fields[name] === null || d.fields[name] === undefined ? '' : d.fields[name];
+      let control;
+      if (DATE_FIELDS.indexOf(name) >= 0) {
+        control = '<input class="input" type="date" id="' + id + '" data-field="' + E(name) + '" value="' + E(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '') + '">';
+      } else if (name === 'auto_renewal') {
+        control = '<select class="select" id="' + id + '" data-field="' + E(name) + '"><option value="">Not stated</option>' +
+          '<option value="YES"' + (v === 'YES' ? ' selected' : '') + '>Yes</option><option value="NO"' + (v === 'NO' ? ' selected' : '') + '>No</option></select>';
+      } else if (name === 'renewal_notice_days') {
+        control = '<input class="input" type="number" min="0" max="730" step="1" id="' + id + '" data-field="' + E(name) + '" value="' + E(v) + '">';
+      } else {
+        control = '<input class="input" id="' + id + '" data-field="' + E(name) + '" value="' + E(v) + '" maxlength="200">';
+      }
+      return '<div class="field' + (name === 'scope' || name === 'holder_name' ? ' full' : '') + '"><label class="field-label" for="' + id + '">' +
+        E(fieldLabel(name, d.documentClass)) + '</label>' + control + '</div>';
+    };
+    const body = '<p class="callout info">' + I('info', 18) + '<span>Type what the document really says. Leave a field empty if it is not printed. ' +
+      'The checks run again on your values, and the change is logged with your name.</span></p>' +
+      '<div class="m2-form m2-section">' + d.fieldNames.map(input).join('') +
+      '<div class="field full"><label class="field-label" for="m2-note">Why are you correcting it? <span class="req-mark" aria-hidden="true">*</span></label>' +
+      '<textarea class="textarea" id="m2-note" rows="2" maxlength="300" placeholder="e.g. Checked against the paper copy"></textarea>' +
+      '<span class="error-text" id="m2-note-error" hidden>Write a short reason.</span></div></div>';
+
+    const dialog = App.modal({
+      title: 'Correct ' + d.docTypeName + ' · ' + d.docId,
+      wide: true,
+      body: body,
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        {
+          label: 'Save correction', kind: 'primary', busyLabel: 'Saving…',
+          onClick: async (ctx) => {
+            const note = ctx.body.querySelector('#m2-note').value.trim();
+            ctx.body.querySelector('#m2-note-error').hidden = !!note;
+            if (!note) { ctx.body.querySelector('#m2-note').focus(); return false; }
+            const fields = {};
+            ctx.body.querySelectorAll('[data-field]').forEach((el) => {
+              const name = el.dataset.field;
+              const now = el.value.trim();
+              const before = d.fields[name] === null || d.fields[name] === undefined ? '' : String(d.fields[name]);
+              if (now !== before) fields[name] = now === '' ? null : now;
+            });
+            const out = await App.api('M2_pageCorrect', d.docId, fields, note);
+            st.data = out.page;
+            render();
+            App.toast(out.result.changed.length
+              ? 'Saved. Changed: ' + out.result.changed.map((f) => fieldLabel(f, d.documentClass)).join(', ') + '.'
+              : 'Saved. The officer confirmed the values as they are.', 'ok');
+            setTimeout(() => openDetail(d.docId), 220);
+          }
+        }
+      ]
+    });
+    // The "write a reason" message goes away as soon as the officer starts typing.
+    dialog.body.querySelector('#m2-note').addEventListener('input', () => { dialog.body.querySelector('#m2-note-error').hidden = true; });
+  }
+
+  /* ---------------------------------------------------------------- Read the queue */
+
+  async function runQueue() {
+    if (st.running) return;
+    st.running = true;
+    const btn = byId('m2-run');
+    btn.disabled = true;
+    let done = 0;
+    let failed = 0;
+    try {
+      for (let round = 0; round < 20; round++) {
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Reading… ' + done + ' done';
+        const r = await App.api('M2_pageProcessQueue', READ_BATCH);
+        done += r.read;
+        failed += r.failed;
+        if (!r.left || !r.handled || !r.read) break; // finished, or only cached/skipped ones are left
+      }
+      App.toast('Gemini read ' + done + ' document' + (done === 1 ? '' : 's') + (failed ? ', ' + failed + ' failed' : '') + '.', failed ? 'error' : 'ok');
+    } catch (err) {
+      App.toast(err.message, 'error');
+    } finally {
+      st.running = false;
+      await load();
+    }
+  }
+
+  /* ---------------------------------------------------------------- Events */
+
+  function bindEvents() {
+    if (st.bound) return;
+    st.bound = true;
+    byId('m2-refresh').addEventListener('click', () => load());
+    byId('m2-run').addEventListener('click', runQueue);
+    byId('m2-search').addEventListener('input', (e) => { st.filter.q = e.target.value; if (st.data) renderTable(); });
+    byId('m2-filter-class').addEventListener('change', (e) => { st.filter.cls = e.target.value; if (st.data) renderTable(); });
+    byId('m2-tiles').addEventListener('click', (e) => {
+      const tile = e.target.closest('[data-state]');
+      if (!tile || !st.data) return;
+      st.filter.state = st.filter.state === tile.dataset.state ? '' : tile.dataset.state;
+      renderTiles();
+      renderTable();
+    });
+    byId('m2-table').addEventListener('click', (e) => {
+      if (e.target.closest('[data-m2-clear]')) {
+        st.filter = { q: '', state: '', cls: '' };
+        byId('m2-search').value = '';
+        byId('m2-filter-class').value = '';
+        renderTiles();
+        renderTable();
+        return;
+      }
+      const row = e.target.closest('[data-doc]');
+      if (row) openDetail(row.dataset.doc);
+    });
+  }
+})();
+</script>

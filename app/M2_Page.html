@@ -1,0 +1,61 @@
+<!-- M2_Page · Member 2: AI Document Analysis. Rendered by M2_Client. -->
+<style>
+  /* Member 2 only. Every class starts with m2- so nothing clashes with the shared styles. */
+  .m2-fields { display: grid; grid-template-columns: minmax(150px, 34%) 1fr; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; font-size: 14px; }
+  .m2-fields dt, .m2-fields dd { margin: 0; padding: 10px 14px; border-bottom: 1px solid #EEF2F6; }
+  .m2-fields dt { background: var(--surface-2); color: var(--ink-3); font-weight: 600; }
+  .m2-fields dd { color: var(--ink); overflow-wrap: anywhere; }
+  .m2-fields dt:nth-last-of-type(1), .m2-fields dd:last-of-type { border-bottom: 0; }
+  .m2-empty-value { color: var(--muted); font-style: italic; }
+  .m2-flag { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--warn); }
+  .m2-flag.bad { color: var(--danger); }
+  .m2-compare { margin-top: 4px; font-size: 12.5px; color: var(--ink-3); }
+  .m2-issues { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .m2-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .m2-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: 12.5px; color: var(--ink-3); margin-top: 14px; }
+  .m2-meta a { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; font-weight: 600; }
+  .m2-section { margin-top: 18px; }
+  .m2-section h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+  .m2-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .m2-form .full { grid-column: 1 / -1; }
+  .m2-key { margin-top: 12px; }
+  @media (max-width: 640px) {
+    .m2-fields { grid-template-columns: 1fr; }
+    .m2-fields dt { border-bottom: 0; padding-bottom: 2px; }
+    .m2-form { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div id="m2-view" class="section-gap">
+  <div class="page-head">
+    <div>
+      <div class="eyebrow">Intelligence · Member 2</div>
+      <h1 class="page-title">AI Document Analysis</h1>
+      <p class="page-sub">Gemini reads every uploaded document once. Fixed rules then check what it read against the supplier register. Anything unclear goes to a person, never a guess.</p>
+    </div>
+    <div class="head-actions">
+      <button type="button" class="btn btn-secondary" id="m2-refresh"><span data-icon="refresh" data-size="16"></span>Refresh</button>
+      <button type="button" class="btn btn-primary" id="m2-run"><span data-icon="sparkles" data-size="16"></span>Read waiting documents</button>
+    </div>
+  </div>
+  <div id="m2-banner"></div>
+  <div class="tiles" id="m2-tiles" role="group" aria-label="Filter by analysis result"></div>
+  <div class="card">
+    <div class="toolbar">
+      <div class="search">
+        <span data-icon="search" data-size="16"></span>
+        <label class="visually-hidden" for="m2-search">Search documents</label>
+        <input id="m2-search" type="search" placeholder="Search supplier, document or number" autocomplete="off">
+      </div>
+      <label class="visually-hidden" for="m2-filter-class">Document class</label>
+      <select class="select" id="m2-filter-class">
+        <option value="">All classes</option>
+        <option value="CONTRACT">Contracts</option>
+        <option value="LICENCE">Licences</option>
+        <option value="CERTIFICATE">Certificates</option>
+      </select>
+      <span class="count" id="m2-count" aria-live="polite"></span>
+    </div>
+    <div id="m2-table" class="table-wrap"></div>
+  </div>
+</div>
