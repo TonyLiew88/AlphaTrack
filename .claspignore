@@ -1,0 +1,3 @@
+# clasp uploads only what the Apps Script project needs from app/.
+**/*.md
+**/node_modules/**

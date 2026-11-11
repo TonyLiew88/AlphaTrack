@@ -12,3 +12,6 @@ __pycache__/
 ~$*
 .DS_Store
 Thumbs.db
+
+# clasp: links this folder to your own Apps Script project (scriptId). Kept on this computer only.
+.clasp.json
