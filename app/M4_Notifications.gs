@@ -843,3 +843,17 @@ function test_M4_rules() {
   console.log('test_M4_rules: all ' + passed + ' checks passed.');
   return passed;
 }
+
+/* Helpers a teammate added in the Apps Script editor (kept so nothing is lost). */
+function authorizeGmail() {
+  GmailApp.sendEmail(Session.getEffectiveUser().getEmail(), 'AlphaTrack Gmail permission test', 'If you got this, AlphaTrack can send email.');
+}
+
+function checkDriveAccess() {
+  const id = '1Be3dxfD0a6VuqKKV8omMqAwdF7calm8C';
+  try {
+    console.log('OK, opened: ' + DriveApp.getFolderById(id).getName());
+  } catch (e) {
+    console.log('Real error: ' + e.message);
+  }
+}
