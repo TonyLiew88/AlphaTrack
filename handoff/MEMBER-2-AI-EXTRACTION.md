@@ -38,6 +38,15 @@ Ask Member 5 before you edit `Index.html`, because it is a shared file.
 
 Name your main function **`M2_extractDocument(docId)`**. The Overview page checks for that name: when it exists, the AI module shows as **Connected**.
 
+### Updating the live app safely
+
+`clasp push` **replaces the whole Apps Script project** with the files on your computer, so it can wipe out files you don't have yet:
+1. Always `git pull` first, so you have everyone's latest files.
+2. Then run `clasp push`.
+3. Then `git push` your commit.
+
+Tell Member 5 when you've pushed. If you only edit in the browser editor, don't use `clasp push` at all.
+
 ## 3. Your input: the work queue
 
 ```js
