@@ -17,6 +17,7 @@
   .m4-stage-URGENT_ESCALATION { background: #FEE2E2; color: #B91C1C; border: 1px solid #FECACA; }
   .m4-stage-SUBMISSION_REQUEST { background: #F3E8FF; color: #7E22CE; border: 1px solid #E9D5FF; }
   .m4-stage-REVIEW_ALERT { background: #E0F2FE; color: #0369A1; border: 1px solid #BAE6FD; }
+  .m4-stage-INTERNAL_ESCALATION { background: #B91C1C; color: #FFFFFF; border: 1px solid #991B1B; }
 
   .m4-approval-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
   .m4-approval-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -73,6 +74,7 @@
           <option value="URGENT_ESCALATION">Urgent Escalation</option>
           <option value="SUBMISSION_REQUEST">Missing Document Request</option>
           <option value="REVIEW_ALERT">Internal Review Alert</option>
+          <option value="INTERNAL_ESCALATION">Internal Escalation</option>
         </select>
         <label class="visually-hidden" for="m4-filter-approval">Approval Status</label>
         <select class="select" id="m4-filter-approval">

@@ -14,6 +14,10 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
 | `Index.html`, `Styles.html`, `AppClient.html` | Member 5 (shared) | Page shell: AlphaTrack sidebar with the 5 pages, design system, icons, animations, navigation, dialogs, toasts. |
 | `OverviewClient.html` | Member 5 | The Overview dashboard, plus the “coming next” pages for Members 2–4. |
 | `M1_Page.html`, `M1_Client.html` | **Member 1** | The Supplier & Document Management page. |
+| `M2_Extraction.gs`, `M2_Accuracy.gs`, `M2_Page.html`, `M2_Client.html` | **Member 2** | AI document extraction and verification, and its page. |
+| `M3_Risk.gs`, `M3_Page.html`, `M3_Client.html` | **Member 3** | Expiry detection and risk analysis, and its page. |
+| `M4_Notifications.gs`, `M4_Page.html`, `M4_Client.html` | **Member 4** | Renewal cases, Gmail reminders, approval, follow-ups and escalation, and the Notifications & Renewals page. |
+| `M5_Integration.gs` | Member 5 | Runs the modules in order (end-to-end monitoring) and the daily schedule. |
 | `appsscript.json` | Member 5 | Malaysia time zone, and the web app runs as you, for you only. |
 
 `../dev/` holds development-only tools that are **not** pasted into Apps Script: a local preview and offline tests.
@@ -27,8 +31,8 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
    - Tick **Show "appsscript.json" manifest file in editor**.
 4. **Add the files.** Back in the editor:
    - Open `appsscript.json` and replace its contents with ours.
-   - Click **+ → Script** for each `.gs` file: `00_Config`, `01_Database`, `02_App`, `M1_Suppliers`, `M1_DemoDataset`, `M1_DemoDatasetData`.
-   - Click **+ → HTML** for each `.html` file: `Index`, `Styles`, `AppClient`, `OverviewClient`, `M1_Page`, `M1_Client`. Type the names without `.html`.
+   - Click **+ → Script** for each `.gs` file: `00_Config`, `01_Database`, `02_App`, `M1_Suppliers`, `M1_DemoDataset`, `M1_DemoDatasetData`, `M2_Extraction`, `M2_Accuracy`, `M3_Risk`, `M4_Notifications`, `M5_Integration`.
+   - Click **+ → HTML** for each `.html` file: `Index`, `Styles`, `AppClient`, `OverviewClient`, `M1_Page`, `M1_Client`, `M2_Page`, `M2_Client`, `M3_Page`, `M3_Client`, `M4_Page`, `M4_Client`. Type the names without `.html`.
    - Paste each file's contents in, replacing what's there, then save.
 5. **Create the tabs.** Choose `SEG_setupDatabase` in the function dropdown and click **Run**.
    - The first time, Google asks for permission. Click **Review permissions**, choose your account, then **Advanced → Go to (project)**. The warning appears because the script is yours and unpublished.
@@ -53,6 +57,15 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
    - the Drive folder `AlphaTrack - Supplier Documents`.
 
    They open the app through **Deploy → Test deployments**, which runs as them. The brief for Member 2 is in [handoff/MEMBER-2-AI-EXTRACTION.md](../handoff/MEMBER-2-AI-EXTRACTION.md).
+
+## Member 4: notifications setup
+
+1. **Gmail permission.** The first time you run `M4_prepareNotifications` (or approve an email), Google asks for permission to send email as you. Allow it.
+2. **Who gets internal escalations (optional).** In **Project Settings → Script properties**, add `COMPLIANCE_MANAGER_EMAIL` with the compliance manager's address. If a supplier's *internal officer* field holds an email address, that person gets the escalation instead. With neither, escalations go to the account the app runs as.
+3. **Use your own inbox for testing.** Approving a supplier email really sends it. Before approving, set the test suppliers' contact emails to an address you own.
+4. **Test.** Run `test_M4_rules` (20 checks, touches no data). Offline, `node dev/run-m4-tests.js` runs the full 25-step check with a fake Gmail.
+
+What happens for each case is described in [handoff/MEMBER-4-NOTIFICATIONS.md](../handoff/MEMBER-4-NOTIFICATIONS.md).
 
 ## What Member 1's page does (spec section 6)
 

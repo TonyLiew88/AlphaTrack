@@ -273,6 +273,15 @@
     }
   };
 
-  Object.assign(g, { Utilities, SpreadsheetApp, DriveApp, PropertiesService, LockService, Session, ScriptApp });
-  g.__mock = { sheets, folders, files, props, triggers };
+  // Fake Gmail: records each email instead of sending it. Set gmail.down = true to make sends fail.
+  const gmail = { sent: [], down: false };
+  const GmailApp = {
+    sendEmail: (to, subject, body, options) => {
+      if (gmail.down) throw new Error('Service unavailable: Gmail (mock)');
+      gmail.sent.push({ to: to, subject: subject, body: body, options: options || {} });
+    }
+  };
+
+  Object.assign(g, { Utilities, SpreadsheetApp, DriveApp, PropertiesService, LockService, Session, ScriptApp, GmailApp });
+  g.__mock = { sheets, folders, files, props, triggers, gmail };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

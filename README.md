@@ -18,7 +18,7 @@ It is one Google Apps Script web app with Google Sheets as the database, Google 
 | Supplier Registration & Document Management | Member 1 | **Built and tested offline** |
 | AI Document Extraction & Verification | Member 2 | **Built and tested offline** |
 | Expiry & Risk Analysis | Member 3 | **Built and tested offline** |
-| Notifications & Renewals | Member 4 | Ready to build (input from Member 3 ready) |
+| Notifications & Renewals | Member 4 | **Built, tested offline and in Google with Gmail** (`node dev/run-m4-tests.js`) |
 | Overview, integration and scheduling | Member 5 | Shared database, page shell and Overview dashboard built; scheduling not started |
 
 ## What's in this repository
@@ -28,7 +28,7 @@ It is one Google Apps Script web app with Google Sheets as the database, Google 
 | [`app/`](app/) | The Apps Script web app: every `.gs` and `.html` file to paste into Apps Script. Setup steps are in [app/README.md](app/README.md). |
 | [`test-pdfs/`](test-pdfs/) | **Every fake PDF, in one place.** `1. Suppliers already in AlphaTrack` has one folder per company (loaded automatically). `2. Video demo - BrightClean` holds the PDFs you upload yourself in the demo video, plus step-by-step notes. See [test-pdfs/README.md](test-pdfs/README.md). |
 | [`dataset/`](dataset/) | How the test data is made: the generator script and the GroundTruth answer key (what each PDF really says). See [dataset/README.md](dataset/README.md). |
-| [`handoff/`](handoff/) | Briefs for teammates. [Member 2: AI extraction](handoff/MEMBER-2-AI-EXTRACTION.md). |
+| [`handoff/`](handoff/) | Briefs for teammates: [Member 2: AI extraction](handoff/MEMBER-2-AI-EXTRACTION.md), [Member 3: expiry & risk](handoff/MEMBER-3-EXPIRY-RISK.md), [Member 4: notifications](handoff/MEMBER-4-NOTIFICATIONS.md). |
 | [`dev/`](dev/) | Development-only tools: offline tests and a local preview. They are not part of the app. |
 
 ## Try it without a Google account
@@ -41,6 +41,11 @@ node dev/run-tests.js
 node dev/build-preview.js
 ```
 
+```bash
+node dev/run-m4-tests.js
+```
+
+- `run-m4-tests.js` runs Member 4's 25 tests (cases, approval, duplicates, follow-ups, escalation) with a fake Gmail that records emails instead of sending them.
 - `run-tests.js` runs every Member 1 test against in-memory stand-ins for Sheets and Drive.
 - `build-preview.js` builds `dev/preview.html`. Open it in Chrome or Edge to click through the real pages with the test dataset loaded. Nothing is sent to Google.
 

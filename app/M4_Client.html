@@ -15,7 +15,8 @@
     FOLLOW_UP: { label: 'Follow-Up Notice', cls: 'm4-stage-FOLLOW_UP', icon: 'alert' },
     URGENT_ESCALATION: { label: 'Urgent Escalation', cls: 'm4-stage-URGENT_ESCALATION', icon: 'alert' },
     SUBMISSION_REQUEST: { label: 'Submission Request', cls: 'm4-stage-SUBMISSION_REQUEST', icon: 'mail' },
-    REVIEW_ALERT: { label: 'Internal Review', cls: 'm4-stage-REVIEW_ALERT', icon: 'eye' }
+    REVIEW_ALERT: { label: 'Internal Review', cls: 'm4-stage-REVIEW_ALERT', icon: 'eye' },
+    INTERNAL_ESCALATION: { label: 'Internal Escalation', cls: 'm4-stage-INTERNAL_ESCALATION', icon: 'alert' }
   };
 
   const APPROVAL_CONFIG = {
@@ -129,7 +130,7 @@
     // Filter by tile click
     if (st.filter.tile === 'PENDING') items = items.filter((x) => x.approvalStatus === 'PENDING_APPROVAL');
     else if (st.filter.tile === 'SENT') items = items.filter((x) => x.deliveryStatus === 'SENT');
-    else if (st.filter.tile === 'URGENT') items = items.filter((x) => x.stage === 'URGENT_ESCALATION');
+    else if (st.filter.tile === 'URGENT') items = items.filter((x) => x.stage === 'URGENT_ESCALATION' || x.stage === 'INTERNAL_ESCALATION');
 
     // Filter by stage dropdown
     if (st.filter.stage) items = items.filter((x) => x.stage === st.filter.stage);
