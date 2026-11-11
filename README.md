@@ -16,9 +16,9 @@ It is one Google Apps Script web app with Google Sheets as the database, Google 
 | Module | Owner | State |
 |---|---|---|
 | Supplier Registration & Document Management | Member 1 | **Built and tested offline** |
-| AI Document Extraction & Verification | Member 2 | Not started |
-| Expiry & Risk Analysis | Member 3 | Not started |
-| Notifications & Renewals | Member 4 | Not started |
+| AI Document Extraction & Verification | Member 2 | **Built and tested offline** |
+| Expiry & Risk Analysis | Member 3 | **Built and tested offline** |
+| Notifications & Renewals | Member 4 | Ready to build (input from Member 3 ready) |
 | Overview, integration and scheduling | Member 5 | Shared database, page shell and Overview dashboard built; scheduling not started |
 
 ## What's in this repository

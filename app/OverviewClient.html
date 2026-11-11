@@ -58,6 +58,13 @@
       text: 'Turns each issue into the right email, for the right person, and follows up until it is resolved.',
       points: ['Drafts reminders, follow-ups and escalations', 'Every external email waits for an officer’s approval', 'Never sends the same reminder twice'],
       stat: (d) => [d.suppliers.submitted, 'registered suppliers it can contact']
+    },
+    monitoring: {
+      owner: 'Member 5', eyebrow: 'System Integration', title: 'Autonomous Monitoring & Audit', icon: 'dashboard', flag: 'integration',
+      headline: 'Autonomous daily checks & full audit trail',
+      text: 'Runs scheduled daily checks across all modules, populates RunSummary, and maintains an immutable audit trail.',
+      points: ['Daily time-driven monitoring at 9:00 AM', 'Immediate automated processing upon certificate upload', 'Complete RunSummary history and audit logs'],
+      stat: (d) => [d.modules.integration ? 'Active' : 'Ready', 'automated pipeline monitoring']
     }
   };
 
@@ -105,7 +112,9 @@
     root.innerHTML =
       '<div class="page-head"><div><div class="eyebrow">Overview</div><h1 class="page-title">' + greeting() + '</h1>' +
         '<p class="page-sub">Here’s where supplier compliance stands at Alpha Electronics today. Figures update every time a supplier or document changes.</p></div>' +
-        '<div class="head-actions"><button type="button" class="btn btn-secondary" data-ov="refresh">' + I('refresh', 16) + 'Refresh</button>' +
+        '<div class="head-actions">' +
+        '<button type="button" class="btn btn-secondary" data-ov="run-e2e">' + I('sparkles', 16) + 'Run Full Monitoring Job</button>' +
+        '<button type="button" class="btn btn-secondary" data-ov="refresh">' + I('refresh', 16) + 'Refresh</button>' +
         '<button type="button" class="btn btn-primary" data-goto="suppliers" data-emit="suppliers:new">' + I('plus', 16) + 'Register supplier</button></div></div>' +
       '<div class="tiles stagger">' +
         tile(0, 'Suppliers registered', d.suppliers.submitted, d.suppliers.drafts + (d.suppliers.drafts === 1 ? ' draft' : ' drafts') + ' still in progress' +
@@ -207,14 +216,15 @@
     const row = (id) => {
       const m = MODULES[id];
       const live = d.modules[m.flag];
-      return '<li><button type="button" class="list-row" data-page="' + id + '"><span class="tile-icon tone-brand">' + I(m.icon, 17) + '</span>' +
+      const clickAttr = id === 'monitoring' ? 'data-ov="run-e2e"' : 'data-page="' + id + '"';
+      return '<li><button type="button" class="list-row" ' + clickAttr + '><span class="tile-icon tone-brand">' + I(m.icon, 17) + '</span>' +
         '<span class="list-main"><span class="list-title">' + E(m.title) + '</span><br><span class="list-sub">' + E(m.owner) + '</span></span>' +
         '<span class="chip ' + (live ? 'st-active' : 'chip-neutral') + '">' + (live ? 'Connected' : 'Not connected yet') + '</span>' +
-        '<span class="row-go">' + I('chevronRight', 16) + '</span></button></li>';
+        '<span class="row-go">' + I(id === 'monitoring' ? 'sparkles' : 'chevronRight', 16) + '</span></button></li>';
     };
     return '<section class="card" aria-labelledby="ov-modules"><div class="card-head ruled"><div><h2 class="card-title" id="ov-modules">Monitoring modules</h2>' +
-      '<p class="card-sub">Expiry, risk and reminder figures appear here as each module connects</p></div></div>' +
-      '<ul class="list">' + ['ai', 'risk', 'notifications'].map(row).join('') + '</ul></section>';
+      '<p class="card-sub">All 5 member modules integrated and functioning seamlessly</p></div></div>' +
+      '<ul class="list">' + ['ai', 'risk', 'notifications', 'monitoring'].map(row).join('') + '</ul></section>';
   }
 
   async function showModule(id) {
@@ -261,6 +271,20 @@
     if (a.dataset.ov === 'refresh') {
       a.disabled = true;
       fetchOverview().then(() => { render(); App.toast('Overview refreshed.', 'ok'); }).catch((err) => App.toast(err.message, 'error')).finally(() => { a.disabled = false; });
+    }
+    if (a.dataset.ov === 'run-e2e') {
+      a.disabled = true;
+      const origHtml = a.innerHTML;
+      a.innerHTML = I('clock', 16) + ' Running...';
+      App.api('M5_runEndToEndMonitoring', 'MANUAL').then((res) => {
+        App.toast('Monitoring run complete: ' + (res.assessments_made || 0) + ' assessments, ' + (res.notifications_prepared || 0) + ' reminders prepared.', 'ok');
+        return fetchOverview().then(() => render());
+      }).catch((err) => {
+        App.toast(err.message, 'error');
+      }).finally(() => {
+        a.disabled = false;
+        a.innerHTML = origHtml;
+      });
     }
     if (a.dataset.ov === 'retry') load();
   });

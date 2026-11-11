@@ -1,0 +1,258 @@
+<!-- M3_Page · Member 3: Expiry & Risk Analysis. Rendered by M3_Client. -->
+<style>
+  /* Member 3 styling. Matches the clean design in AI Document Analysis (Member 2). */
+  .m3-tiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  @media (min-width: 900px) {
+    .m3-tiles {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+  }
+
+  .m3-risk-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .m3-risk-CRITICAL {
+    background: #feeceb;
+    color: #b42318;
+    border: 1px solid #fecdca;
+  }
+  .m3-risk-HIGH {
+    background: #fef0c7;
+    color: #b54708;
+    border: 1px solid #fedf89;
+  }
+  .m3-risk-MEDIUM {
+    background: #e0f2fe;
+    color: #026aa2;
+    border: 1px solid #bae6fd;
+  }
+  .m3-risk-LOW {
+    background: #ecfdf3;
+    color: #027a48;
+    border: 1px solid #a6f4c5;
+  }
+
+  .m3-status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .m3-status-chip::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .m3-st-EXPIRED,
+  .m3-st-ENDED {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .m3-st-EXPIRING_SOON,
+  .m3-st-ENDING_SOON {
+    background: var(--warn-soft);
+    color: var(--warn);
+  }
+  .m3-st-MISSING {
+    background: #feeceb;
+    color: #b42318;
+  }
+  .m3-st-NEEDS_REVIEW {
+    background: #ede9fe;
+    color: #6d28d9;
+  }
+  .m3-st-VALID,
+  .m3-st-ACTIVE {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+  .m3-st-NO_FIXED_END_DATE {
+    background: #eef1f6;
+    color: #475569;
+  }
+
+  .m3-countdown-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .m3-cd-critical {
+    color: var(--danger);
+    background: var(--danger-soft);
+    padding: 1px 7px;
+    border-radius: 6px;
+  }
+  .m3-cd-high {
+    color: var(--warn);
+    background: var(--warn-soft);
+    padding: 1px 7px;
+    border-radius: 6px;
+  }
+  .m3-cd-med {
+    color: #026aa2;
+    background: #e0f2fe;
+    padding: 1px 7px;
+    border-radius: 6px;
+  }
+  .m3-cd-ok {
+    color: var(--ok);
+  }
+  .m3-cd-neutral {
+    color: var(--muted);
+  }
+
+  .m3-dossier {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    font-size: 13.5px;
+  }
+  .m3-dossier-grid {
+    display: grid;
+    grid-template-columns: minmax(130px, 30%) 1fr;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    overflow: hidden;
+  }
+  .m3-dossier-grid dt,
+  .m3-dossier-grid dd {
+    margin: 0;
+    padding: 9px 12px;
+    border-bottom: 1px solid #eef2f6;
+  }
+  .m3-dossier-grid dt {
+    background: var(--surface-2);
+    color: var(--ink-3);
+    font-weight: 600;
+  }
+  .m3-dossier-grid dd {
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  .m3-dossier-grid dt:last-of-type,
+  .m3-dossier-grid dd:last-of-type {
+    border-bottom: 0;
+  }
+
+  .m3-action-box {
+    padding: 12px 14px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    border-left: 4px solid var(--brand);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .m3-action-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .m3-action-text {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .m3-threshold-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin-top: 10px;
+  }
+</style>
+
+<div id="m3-view" class="section-gap">
+  <div class="page-head">
+    <div>
+      <div class="eyebrow">Intelligence · Member 3</div>
+      <h1 class="page-title">Expiry &amp; Risk Analysis</h1>
+      <p class="page-sub">
+        Monitors expiry dates and contract end dates. Automatically flags
+        documents expiring within 5 days as High Risk, overdue items as Critical
+        Risk, and valid documents as Low Risk.
+      </p>
+    </div>
+    <div class="head-actions">
+      <button type="button" class="btn btn-secondary" id="m3-refresh">
+        <span data-icon="refresh" data-size="16"></span>Refresh
+      </button>
+      <button type="button" class="btn btn-secondary" id="m3-config-btn">
+        <span data-icon="cog" data-size="16"></span>Thresholds (5 Days)
+      </button>
+      <button type="button" class="btn btn-primary" id="m3-run-btn">
+        <span data-icon="clock" data-size="16"></span>Assess Expiry &amp; Risk
+      </button>
+    </div>
+  </div>
+
+  <div id="m3-banner"></div>
+
+  <!-- 5 Top KPI Tiles (Matching AI Document Analysis layout) -->
+  <div
+    class="m3-tiles"
+    id="m3-tiles"
+    role="group"
+    aria-label="Filter by risk category"
+  ></div>
+
+  <!-- Main Assessments Table -->
+  <div class="card">
+    <div class="toolbar">
+      <div class="search">
+        <span data-icon="search" data-size="16"></span>
+        <label class="visually-hidden" for="m3-search">Search documents</label>
+        <input
+          id="m3-search"
+          type="search"
+          placeholder="Search supplier, document, number or reason"
+          autocomplete="off"
+        />
+      </div>
+      <label class="visually-hidden" for="m3-filter-risk">Risk Level</label>
+      <select class="select" id="m3-filter-risk">
+        <option value="">All Risk Levels</option>
+        <option value="CRITICAL">Critical Risk (Overdue / Missing)</option>
+        <option value="HIGH">High Risk (≤ 5 Days Remaining)</option>
+        <option value="MEDIUM">Medium Risk (6–30 Days Remaining)</option>
+        <option value="LOW">Low Risk (> 30 Days / Compliant)</option>
+      </select>
+      <label class="visually-hidden" for="m3-filter-class"
+        >Document Class</label
+      >
+      <select class="select" id="m3-filter-class">
+        <option value="">All Classes</option>
+        <option value="CONTRACT">Contracts</option>
+        <option value="LICENCE">Licences</option>
+        <option value="CERTIFICATE">Certificates</option>
+      </select>
+      <span class="count" id="m3-count" aria-live="polite"></span>
+    </div>
+    <div id="m3-table" class="table-wrap"></div>
+  </div>
+</div>

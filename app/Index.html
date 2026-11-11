@@ -88,8 +88,12 @@
         <section class="page" id="page-ai" hidden aria-label="AI Document Analysis">
           <?!= include('M2_Page'); ?>
         </section>
-        <section class="page" id="page-risk" hidden aria-label="Expiry and Risk"></section>
-        <section class="page" id="page-notifications" hidden aria-label="Notifications and Renewals"></section>
+        <section class="page" id="page-risk" hidden aria-label="Expiry and Risk">
+          <?!= include('M3_Page'); ?>
+        </section>
+        <section class="page" id="page-notifications" hidden aria-label="Notifications and Renewals">
+          <?!= include('M4_Page'); ?>
+        </section>
       </main>
     </div>
   </div>
@@ -101,5 +105,7 @@
   <?!= include('OverviewClient'); ?>
   <?!= include('M1_Client'); ?>
   <?!= include('M2_Client'); ?>
+  <?!= include('M3_Client'); ?>
+  <?!= include('M4_Client'); ?>
 </body>
 </html>

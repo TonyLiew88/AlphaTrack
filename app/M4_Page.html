@@ -1,0 +1,112 @@
+<!-- M4_Page · Member 4: Notifications & Renewal Management. Rendered by M4_Client. -->
+<style>
+  /* Member 4 styling. Follows AlphaTrack design standards. */
+  .m4-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+  @media (min-width: 900px) {
+    .m4-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+
+  .m4-tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  .m4-tab-btn { padding: 8px 16px; border-radius: var(--r-sm); font-size: 13.5px; font-weight: 600; border: 0; background: transparent; color: var(--muted); cursor: pointer; transition: all var(--t2); }
+  .m4-tab-btn:hover { background: var(--surface-2); color: var(--ink); }
+  .m4-tab-btn.active { background: var(--brand-soft); color: var(--brand-ink); font-weight: 700; }
+
+  .m4-stage-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+  .m4-stage-FIRST_REMINDER { background: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; }
+  .m4-stage-FOLLOW_UP { background: #FEF3C7; color: #B45309; border: 1px solid #FDE68A; }
+  .m4-stage-URGENT_ESCALATION { background: #FEE2E2; color: #B91C1C; border: 1px solid #FECACA; }
+  .m4-stage-SUBMISSION_REQUEST { background: #F3E8FF; color: #7E22CE; border: 1px solid #E9D5FF; }
+  .m4-stage-REVIEW_ALERT { background: #E0F2FE; color: #0369A1; border: 1px solid #BAE6FD; }
+
+  .m4-approval-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .m4-approval-chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .m4-app-PENDING_APPROVAL { background: var(--warn-soft); color: var(--warn); }
+  .m4-app-APPROVED, .m4-app-AUTO_APPROVED { background: var(--ok-soft); color: var(--ok); }
+  .m4-app-REJECTED { background: var(--danger-soft); color: var(--danger); }
+
+  .m4-email-preview { border: 1px solid var(--border); border-radius: var(--r); background: #FFFFFF; overflow: hidden; box-shadow: var(--shadow-sm); }
+  .m4-preview-head { background: var(--surface-2); padding: 14px 18px; border-bottom: 1px solid var(--border); font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+  .m4-preview-row { display: grid; grid-template-columns: 80px 1fr; align-items: baseline; }
+  .m4-preview-label { font-weight: 700; color: var(--muted); }
+  .m4-preview-body { padding: 20px; font-size: 14px; max-height: 440px; overflow-y: auto; }
+</style>
+
+<div id="m4-view" class="section-gap">
+  <div class="page-head">
+    <div>
+      <div class="eyebrow">Intelligence · Member 4</div>
+      <h1 class="page-title">Notifications &amp; Renewals</h1>
+      <p class="page-sub">Prepares automated Gmail reminders, renewal follow-ups, and urgent escalations based on Member 3 risk assessments. External emails require officer sign-off before sending.</p>
+    </div>
+    <div class="head-actions">
+      <button type="button" class="btn btn-secondary" id="m4-refresh"><span data-icon="refresh" data-size="16"></span>Refresh</button>
+      <button type="button" class="btn btn-secondary" id="m4-approve-all-btn"><span data-icon="checkCircle" data-size="16"></span>Approve All Pending</button>
+      <button type="button" class="btn btn-primary" id="m4-prepare-btn"><span data-icon="sparkles" data-size="16"></span>Prepare Reminders</button>
+    </div>
+  </div>
+
+  <div id="m4-banner"></div>
+
+  <!-- 4 Top KPI Tiles -->
+  <div class="m4-tiles" id="m4-tiles" role="group" aria-label="Filter notifications"></div>
+
+  <!-- View Switcher -->
+  <div class="m4-tabs">
+    <button type="button" class="m4-tab-btn active" data-m4-tab="queue"><span data-icon="mail"></span> Notification Queue &amp; History</button>
+    <button type="button" class="m4-tab-btn" data-m4-tab="cases"><span data-icon="layers"></span> Renewal Cases Tracker</button>
+  </div>
+
+  <!-- Notifications Queue Container -->
+  <div id="m4-queue-panel">
+    <div class="card">
+      <div class="toolbar">
+        <div class="search">
+          <span data-icon="search" data-size="16"></span>
+          <label class="visually-hidden" for="m4-search">Search notifications</label>
+          <input id="m4-search" type="search" placeholder="Search supplier, recipient, subject or ID" autocomplete="off">
+        </div>
+        <label class="visually-hidden" for="m4-filter-stage">Stage</label>
+        <select class="select" id="m4-filter-stage">
+          <option value="">All Stages</option>
+          <option value="FIRST_REMINDER">First Reminder</option>
+          <option value="FOLLOW_UP">Follow-Up Notice</option>
+          <option value="URGENT_ESCALATION">Urgent Escalation</option>
+          <option value="SUBMISSION_REQUEST">Missing Document Request</option>
+          <option value="REVIEW_ALERT">Internal Review Alert</option>
+        </select>
+        <label class="visually-hidden" for="m4-filter-approval">Approval Status</label>
+        <select class="select" id="m4-filter-approval">
+          <option value="">All Approval Statuses</option>
+          <option value="PENDING_APPROVAL">Pending Approval</option>
+          <option value="APPROVED">Approved / Sent</option>
+          <option value="REJECTED">Rejected</option>
+        </select>
+        <span class="count" id="m4-count" aria-live="polite"></span>
+      </div>
+      <div id="m4-table" class="table-wrap"></div>
+    </div>
+  </div>
+
+  <!-- Renewal Cases Panel -->
+  <div id="m4-cases-panel" hidden>
+    <div class="card">
+      <div class="toolbar">
+        <div class="search">
+          <span data-icon="search" data-size="16"></span>
+          <label class="visually-hidden" for="m4-search-cases">Search cases</label>
+          <input id="m4-search-cases" type="search" placeholder="Search supplier, case ID, requirement" autocomplete="off">
+        </div>
+        <label class="visually-hidden" for="m4-filter-case-status">Case Status</label>
+        <select class="select" id="m4-filter-case-status">
+          <option value="">All Case Statuses</option>
+          <option value="OPEN">Open Cases</option>
+          <option value="ESCALATED">Escalated Cases</option>
+          <option value="RESOLVED">Resolved Cases</option>
+        </select>
+        <span class="count" id="m4-cases-count" aria-live="polite"></span>
+      </div>
+      <div id="m4-cases-table" class="table-wrap"></div>
+    </div>
+  </div>
+</div>
+

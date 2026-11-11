@@ -1,0 +1,545 @@
+<script>
+/**
+ * M4_Client · Member 4: Notifications & Renewal Management (browser side)
+ *
+ * Implements the notification approval system, email preview modal,
+ * duplicate-protected reminder queue, and renewal case lifecycle tracking.
+ */
+(() => {
+  const E = App.esc;
+  const I = App.icon;
+  const byId = (id) => document.getElementById(id);
+
+  const STAGE_CONFIG = {
+    FIRST_REMINDER: { label: 'First Reminder', cls: 'm4-stage-FIRST_REMINDER', icon: 'clock' },
+    FOLLOW_UP: { label: 'Follow-Up Notice', cls: 'm4-stage-FOLLOW_UP', icon: 'alert' },
+    URGENT_ESCALATION: { label: 'Urgent Escalation', cls: 'm4-stage-URGENT_ESCALATION', icon: 'alert' },
+    SUBMISSION_REQUEST: { label: 'Submission Request', cls: 'm4-stage-SUBMISSION_REQUEST', icon: 'mail' },
+    REVIEW_ALERT: { label: 'Internal Review', cls: 'm4-stage-REVIEW_ALERT', icon: 'eye' }
+  };
+
+  const APPROVAL_CONFIG = {
+    PENDING_APPROVAL: { label: 'Pending Approval', cls: 'm4-app-PENDING_APPROVAL' },
+    APPROVED: { label: 'Approved', cls: 'm4-app-APPROVED' },
+    AUTO_APPROVED: { label: 'Auto-Approved', cls: 'm4-app-AUTO_APPROVED' },
+    REJECTED: { label: 'Rejected', cls: 'm4-app-REJECTED' }
+  };
+
+  const CASE_STATUS_CONFIG = {
+    OPEN: { label: 'Open', cls: 'st-pending-docs' },
+    ESCALATED: { label: 'Escalated', cls: 'crit-HIGH' },
+    RESOLVED: { label: 'Resolved', cls: 'st-active' }
+  };
+
+  const st = {
+    data: null,
+    loading: false,
+    bound: false,
+    activeTab: 'queue', // 'queue' | 'cases'
+    filter: { q: '', stage: '', approval: '', caseStatus: '', tile: '' }
+  };
+
+  App.registerPage('notifications', {
+    show() {
+      bindEvents();
+      load();
+    }
+  });
+
+  /* ---------------------------------------------------------------- Helpers */
+
+  function stagePill(stage) {
+    const s = STAGE_CONFIG[stage] || { label: stage, cls: 'm4-stage-FIRST_REMINDER', icon: 'mail' };
+    return '<span class="m4-stage-pill ' + s.cls + '">' + I(s.icon, 13) + ' ' + E(s.label) + '</span>';
+  }
+
+  function approvalChip(status) {
+    const a = APPROVAL_CONFIG[status] || { label: status, cls: 'm4-app-PENDING_APPROVAL' };
+    return '<span class="m4-approval-chip ' + a.cls + '">' + E(a.label) + '</span>';
+  }
+
+  function caseChip(status) {
+    const c = CASE_STATUS_CONFIG[status] || { label: status, cls: 'chip-neutral' };
+    return '<span class="chip ' + c.cls + ' chip-dot">' + E(c.label) + '</span>';
+  }
+
+  /* ---------------------------------------------------------------- Loading */
+
+  async function load() {
+    if (st.loading) return;
+    st.loading = true;
+    const banner = byId('m4-banner');
+    if (banner) banner.innerHTML = '';
+
+    try {
+      const data = await App.api('M4_getNotificationsPage');
+      st.data = data;
+      render();
+    } catch (err) {
+      if (banner) {
+        banner.innerHTML = '<div class="callout danger enter"><span data-icon="alert"></span><div><strong>Could not load notifications:</strong> ' + E(err.message) + '</div></div>';
+      }
+    } finally {
+      st.loading = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- Rendering */
+
+  function render() {
+    renderTiles();
+    renderQueueTable();
+    renderCasesTable();
+  }
+
+  function renderTiles() {
+    const root = byId('m4-tiles');
+    if (!root || !st.data) return;
+    const c = st.data.counts || {};
+
+    const tiles = [
+      { id: 'PENDING', label: 'Pending Approval', count: c.pendingApproval || 0, tone: 'tone-warn', icon: 'eye', foot: 'Requires officer sign-off' },
+      { id: 'SENT', label: 'Sent Reminders', count: c.sent || 0, tone: 'tone-ok', icon: 'checkCircle', foot: 'Delivered via Gmail' },
+      { id: 'URGENT', label: 'Urgent Escalations', count: c.urgentEscalations || 0, tone: 'tone-danger', icon: 'alert', foot: 'Expired / non-compliant' },
+      { id: 'CASES', label: 'Active Cases', count: c.activeCases || 0, tone: 'tone-brand', icon: 'layers', foot: 'Open renewal tracking' }
+    ];
+
+    root.innerHTML = tiles.map((t, i) => {
+      const active = st.filter.tile === t.id;
+      return '<button type="button" class="tile" style="--i:' + i + '" data-m4-tile="' + t.id + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+        '<div class="tile-top">' +
+          '<span class="tile-label">' + E(t.label) + '</span>' +
+          '<span class="tile-icon ' + t.tone + '" style="width:30px;height:30px;">' + I(t.icon, 16) + '</span>' +
+        '</div>' +
+        '<div class="tile-value" data-count="' + t.count + '">' + t.count + '</div>' +
+        '<div class="tile-foot">' + E(t.foot) + '</div>' +
+      '</button>';
+    }).join('');
+
+    App.countUp(root);
+  }
+
+  function renderQueueTable() {
+    const root = byId('m4-table');
+    const countEl = byId('m4-count');
+    if (!root || !st.data) return;
+
+    let items = st.data.notifications || [];
+
+    // Filter by tile click
+    if (st.filter.tile === 'PENDING') items = items.filter((x) => x.approvalStatus === 'PENDING_APPROVAL');
+    else if (st.filter.tile === 'SENT') items = items.filter((x) => x.deliveryStatus === 'SENT');
+    else if (st.filter.tile === 'URGENT') items = items.filter((x) => x.stage === 'URGENT_ESCALATION');
+
+    // Filter by stage dropdown
+    if (st.filter.stage) items = items.filter((x) => x.stage === st.filter.stage);
+
+    // Filter by approval dropdown
+    if (st.filter.approval) items = items.filter((x) => x.approvalStatus === st.filter.approval);
+
+    // Filter by search input
+    if (st.filter.q) {
+      const q = st.filter.q.toLowerCase().trim();
+      items = items.filter((x) =>
+        (x.supplierName && x.supplierName.toLowerCase().indexOf(q) !== -1) ||
+        (x.recipient && x.recipient.toLowerCase().indexOf(q) !== -1) ||
+        (x.subject && x.subject.toLowerCase().indexOf(q) !== -1) ||
+        (x.notificationId && x.notificationId.toLowerCase().indexOf(q) !== -1)
+      );
+    }
+
+    if (countEl) countEl.textContent = items.length + ' of ' + (st.data.notifications || []).length + ' notifications';
+
+    if (!items.length) {
+      root.innerHTML = '<div class="card empty" style="padding: 40px 20px;">' +
+        '<span class="empty-art tone-neutral">' + I('mail', 28) + '</span>' +
+        '<h3>No notifications in queue</h3>' +
+        '<p class="muted">Click "Prepare Reminders" to draft emails based on active risk assessments.</p>' +
+      '</div>';
+      return;
+    }
+
+    let rows = items.map((n) => {
+      const isPending = n.approvalStatus === 'PENDING_APPROVAL';
+
+      return '<tr class="clickable" data-m4-id="' + E(n.notificationId) + '">' +
+        '<td>' +
+          '<div class="cell-main">' + E(n.supplierName) + '</div>' +
+          '<div class="cell-sub">' + E(n.recipient) + '</div>' +
+        '</td>' +
+        '<td>' + stagePill(n.stage) + '</td>' +
+        '<td style="max-width: 320px;">' +
+          '<div class="cell-main" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + E(n.subject) + '</div>' +
+          '<div class="cell-sub">' + E(n.notificationId) + ' · ' + (n.deliveryStatus === 'SENT' ? 'Sent on ' + E(App.fmtDate(n.sentAt)) : 'Created ' + E(App.fmtDate(n.createdAt))) + '</div>' +
+        '</td>' +
+        '<td>' + approvalChip(n.approvalStatus) + '</td>' +
+        '<td>' +
+          '<span class="chip ' + (n.deliveryStatus === 'SENT' ? 'st-active' : 'chip-neutral') + '">' + E(n.deliveryStatus) + '</span>' +
+        '</td>' +
+        '<td style="text-align: right; white-space: nowrap;">' +
+          '<button type="button" class="btn btn-secondary btn-sm" data-m4-view="' + E(n.notificationId) + '" title="Preview email body">' + I('eye', 13) + ' Preview</button> ' +
+          (isPending ?
+            '<button type="button" class="btn btn-primary btn-sm" data-m4-approve="' + E(n.notificationId) + '" title="Approve and send">' + I('checkCircle', 13) + ' Approve</button> ' +
+            '<button type="button" class="btn btn-ghost btn-sm" data-m4-reject="' + E(n.notificationId) + '" title="Reject draft">' + I('xCircle', 13) + '</button>'
+            : '') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    root.innerHTML = '<table class="data">' +
+      '<thead>' +
+        '<tr>' +
+          '<th>Supplier &amp; Recipient</th>' +
+          '<th>Notification Stage</th>' +
+          '<th>Subject &amp; Ref</th>' +
+          '<th>Approval Status</th>' +
+          '<th>Delivery</th>' +
+          '<th style="text-align:right;">Actions</th>' +
+        '</tr>' +
+      '</thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>';
+  }
+
+  function renderCasesTable() {
+    const root = byId('m4-cases-table');
+    const countEl = byId('m4-cases-count');
+    if (!root || !st.data) return;
+
+    let items = st.data.cases || [];
+
+    if (st.filter.caseStatus) items = items.filter((x) => x.status === st.filter.caseStatus);
+
+    if (countEl) countEl.textContent = items.length + ' case' + (items.length === 1 ? '' : 's');
+
+    if (!items.length) {
+      root.innerHTML = '<div class="card empty" style="padding: 40px 20px;">' +
+        '<span class="empty-art tone-neutral">' + I('layers', 28) + '</span>' +
+        '<h3>No active renewal cases</h3>' +
+        '<p class="muted">All supplier documents are currently compliant.</p>' +
+      '</div>';
+      return;
+    }
+
+    let rows = items.map((c) => {
+      const isOpen = c.status !== 'RESOLVED';
+
+      return '<tr>' +
+        '<td>' +
+          '<div class="cell-main">' + E(c.supplierName) + '</div>' +
+          '<div class="cell-sub">' + E(c.supplierId) + ' · <span class="chip crit-' + E(c.criticality) + '">' + E(c.criticality) + '</span></div>' +
+        '</td>' +
+        '<td>' +
+          '<div class="cell-main">' + E(c.caseId) + '</div>' +
+          '<div class="cell-sub">' + E(c.caseType) + '</div>' +
+        '</td>' +
+        '<td>' + caseChip(c.status) + '</td>' +
+        '<td>' +
+          '<div class="cell-main">' + E(App.fmtDate(c.openedAt)) + '</div>' +
+          (c.resolvedAt ? '<div class="cell-sub">Resolved ' + E(App.fmtDate(c.resolvedAt)) + '</div>' : '<div class="cell-sub">Open</div>') +
+        '</td>' +
+        '<td style="max-width: 260px;">' +
+          '<div class="cell-sub">' + E(c.resolution || 'Awaiting renewal document or manual review') + '</div>' +
+        '</td>' +
+        '<td style="text-align: right;">' +
+          (isOpen ? '<button type="button" class="btn btn-secondary btn-sm" data-m4-resolve="' + E(c.caseId) + '">Resolve Case</button>' : '<span class="cell-sub">Closed</span>') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    root.innerHTML = '<table class="data">' +
+      '<thead>' +
+        '<tr>' +
+          '<th>Supplier</th>' +
+          '<th>Case ID &amp; Type</th>' +
+          '<th>Status</th>' +
+          '<th>Timeline</th>' +
+          '<th>Resolution Note</th>' +
+          '<th style="text-align:right;">Action</th>' +
+        '</tr>' +
+      '</thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>';
+  }
+
+  /* ---------------------------------------------------------------- Email Preview Modal */
+
+  async function openEmailPreview(notificationId) {
+    App.modal({
+      title: 'Loading Email Preview...',
+      body: '<div class="card card-pad" style="text-align:center;"><span class="spinner"></span> Rendering email template...</div>'
+    });
+
+    try {
+      const detail = await App.api('M4_getNotificationDetail', notificationId);
+      const n = detail.notification;
+      const isPending = n.approval_status === 'PENDING_APPROVAL';
+
+      const body = '<div class="m4-email-preview">' +
+        '<div class="m4-preview-head">' +
+          '<div class="m4-preview-row"><span class="m4-preview-label">From:</span><span>Alpha Electronics Procurement &lt;procurement@alpha-electronics.example&gt;</span></div>' +
+          '<div class="m4-preview-row"><span class="m4-preview-label">To:</span><span><strong>' + E(n.recipient) + '</strong> (' + E(n.supplier_id) + ')</span></div>' +
+          '<div class="m4-preview-row"><span class="m4-preview-label">Subject:</span><span><strong>' + E(n.subject) + '</strong></span></div>' +
+          '<div class="m4-preview-row"><span class="m4-preview-label">Stage:</span><span>' + stagePill(n.stage) + ' · ' + approvalChip(n.approval_status) + '</span></div>' +
+        '</div>' +
+        '<div class="m4-preview-body">' + detail.renderedHtml + '</div>' +
+      '</div>' +
+      '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:16px;">' +
+        '<button type="button" class="btn btn-secondary" data-modal-close="true">Close</button>' +
+        (isPending ?
+          '<button type="button" class="btn btn-danger" id="m4-modal-reject-btn" data-notif-id="' + E(n.notification_id) + '">Reject Draft</button>' +
+          '<button type="button" class="btn btn-primary" id="m4-modal-approve-btn" data-notif-id="' + E(n.notification_id) + '">Approve &amp; Send Email</button>'
+          : '') +
+      '</div>';
+
+      App.modal({
+        title: 'Email Preview · ' + n.notification_id,
+        body: body,
+        wide: true
+      });
+
+      const approveBtn = byId('m4-modal-approve-btn');
+      if (approveBtn) {
+        approveBtn.addEventListener('click', async () => {
+          approveBtn.disabled = true;
+          approveBtn.textContent = 'Sending...';
+          try {
+            await App.api('M4_approveNotification', n.notification_id, 'Approved via email preview modal');
+            App.toast('Email approved and sent via Gmail', 'ok');
+            const closeBtn = document.querySelector('[data-modal-close="true"]');
+            if (closeBtn) closeBtn.click();
+            load();
+          } catch (err) {
+            App.toast('Could not approve: ' + err.message, 'danger');
+            approveBtn.disabled = false;
+            approveBtn.textContent = 'Approve & Send Email';
+          }
+        });
+      }
+
+      const rejectBtn = byId('m4-modal-reject-btn');
+      if (rejectBtn) {
+        rejectBtn.addEventListener('click', async () => {
+          rejectBtn.disabled = true;
+          try {
+            await App.api('M4_rejectNotification', n.notification_id, 'Rejected via email preview modal');
+            App.toast('Draft rejected and dismissed', 'ok');
+            const closeBtn = document.querySelector('[data-modal-close="true"]');
+            if (closeBtn) closeBtn.click();
+            load();
+          } catch (err) {
+            App.toast('Could not reject: ' + err.message, 'danger');
+            rejectBtn.disabled = false;
+          }
+        });
+      }
+    } catch (err) {
+      App.modal({
+        title: 'Error Rendering Email',
+        body: '<div class="callout danger"><span data-icon="alert"></span><div>' + E(err.message) + '</div></div>'
+      });
+    }
+  }
+
+  /* ---------------------------------------------------------------- Events */
+
+  function bindEvents() {
+    if (st.bound) return;
+    st.bound = true;
+
+    // Refresh button
+    const refreshBtn = byId('m4-refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => load());
+
+    // Prepare notifications button
+    const prepBtn = byId('m4-prepare-btn');
+    if (prepBtn) {
+      prepBtn.addEventListener('click', async () => {
+        prepBtn.disabled = true;
+        const prev = prepBtn.innerHTML;
+        prepBtn.innerHTML = '<span class="spinner"></span> Preparing...';
+        try {
+          const res = await App.api('M4_prepareNotifications');
+          App.toast('Prepared ' + res.notificationsPrepared + ' new notification(s)', 'ok');
+          load();
+        } catch (err) {
+          App.toast('Preparation failed: ' + err.message, 'danger');
+        } finally {
+          prepBtn.disabled = false;
+          prepBtn.innerHTML = prev;
+        }
+      });
+    }
+
+    // Approve all pending button
+    const approveAllBtn = byId('m4-approve-all-btn');
+    if (approveAllBtn) {
+      approveAllBtn.addEventListener('click', async () => {
+        approveAllBtn.disabled = true;
+        try {
+          const res = await App.api('M4_approveAllPending');
+          App.toast('Approved ' + res.approvedCount + ' notification(s)', 'ok');
+          load();
+        } catch (err) {
+          App.toast('Bulk approval failed: ' + err.message, 'danger');
+        } finally {
+          approveAllBtn.disabled = false;
+        }
+      });
+    }
+
+    // View tab switching
+    document.addEventListener('click', (e) => {
+      const tabBtn = e.target.closest('[data-m4-tab]');
+      if (!tabBtn) return;
+      const tab = tabBtn.getAttribute('data-m4-tab');
+      st.activeTab = tab;
+      document.querySelectorAll('.m4-tab-btn').forEach((b) => b.classList.toggle('active', b === tabBtn));
+
+      const qPanel = byId('m4-queue-panel');
+      const cPanel = byId('m4-cases-panel');
+      if (qPanel && cPanel) {
+        qPanel.hidden = (tab !== 'queue');
+        cPanel.hidden = (tab !== 'cases');
+      }
+    });
+
+    // Search input
+    const searchInput = byId('m4-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        st.filter.q = e.target.value;
+        renderQueueTable();
+      });
+    }
+
+    // Stage filter dropdown
+    const stageSelect = byId('m4-filter-stage');
+    if (stageSelect) {
+      stageSelect.addEventListener('change', (e) => {
+        st.filter.stage = e.target.value;
+        renderQueueTable();
+      });
+    }
+
+    // Approval filter dropdown
+    const approvalSelect = byId('m4-filter-approval');
+    if (approvalSelect) {
+      approvalSelect.addEventListener('change', (e) => {
+        st.filter.approval = e.target.value;
+        renderQueueTable();
+      });
+    }
+
+    // Cases search
+    const caseSearch = byId('m4-search-cases');
+    if (caseSearch) {
+      caseSearch.addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase().trim();
+        const rows = document.querySelectorAll('#m4-cases-table tbody tr');
+        rows.forEach((r) => {
+          r.hidden = q && r.textContent.toLowerCase().indexOf(q) === -1;
+        });
+      });
+    }
+
+    // Cases status filter
+    const caseStatusSelect = byId('m4-filter-case-status');
+    if (caseStatusSelect) {
+      caseStatusSelect.addEventListener('change', (e) => {
+        st.filter.caseStatus = e.target.value;
+        renderCasesTable();
+      });
+    }
+
+    // Table click delegation
+    const queueTable = byId('m4-table');
+    if (queueTable) {
+      queueTable.addEventListener('click', async (e) => {
+        const viewBtn = e.target.closest('[data-m4-view]');
+        if (viewBtn) {
+          e.stopPropagation();
+          openEmailPreview(viewBtn.getAttribute('data-m4-view'));
+          return;
+        }
+
+        const approveBtn = e.target.closest('[data-m4-approve]');
+        if (approveBtn) {
+          e.stopPropagation();
+          const id = approveBtn.getAttribute('data-m4-approve');
+          approveBtn.disabled = true;
+          try {
+            await App.api('M4_approveNotification', id, 'Approved directly from queue table');
+            App.toast('Notification approved and sent via Gmail', 'ok');
+            load();
+          } catch (err) {
+            App.toast('Approval failed: ' + err.message, 'danger');
+            approveBtn.disabled = false;
+          }
+          return;
+        }
+
+        const rejectBtn = e.target.closest('[data-m4-reject]');
+        if (rejectBtn) {
+          e.stopPropagation();
+          const id = rejectBtn.getAttribute('data-m4-reject');
+          if (confirm('Dismiss and reject this reminder draft?')) {
+            try {
+              await App.api('M4_rejectNotification', id, 'Rejected directly from queue table');
+              App.toast('Notification draft dismissed', 'ok');
+              load();
+            } catch (err) {
+              App.toast('Rejection failed: ' + err.message, 'danger');
+            }
+          }
+          return;
+        }
+
+        const row = e.target.closest('tr[data-m4-id]');
+        if (row) {
+          openEmailPreview(row.getAttribute('data-m4-id'));
+        }
+      });
+    }
+
+    // Cases resolve click delegation
+    const casesTable = byId('m4-cases-table');
+    if (casesTable) {
+      casesTable.addEventListener('click', async (e) => {
+        const resBtn = e.target.closest('[data-m4-resolve]');
+        if (!resBtn) return;
+        const id = resBtn.getAttribute('data-m4-resolve');
+        const note = prompt('Enter resolution note:', 'Renewed certificate submitted and verified');
+        if (note !== null) {
+          try {
+            await App.api('M4_resolveCase', id, note);
+            App.toast('Case ' + id + ' marked as resolved', 'ok');
+            load();
+          } catch (err) {
+            App.toast('Could not resolve case: ' + err.message, 'danger');
+          }
+        }
+      });
+    }
+
+    // Tile clicks
+    const tilesRoot = byId('m4-tiles');
+    if (tilesRoot) {
+      tilesRoot.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-m4-tile]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-m4-tile');
+        if (id === 'CASES') {
+          const tabBtn = document.querySelector('[data-m4-tab="cases"]');
+          if (tabBtn) tabBtn.click();
+          return;
+        }
+        st.filter.tile = st.filter.tile === id ? '' : id;
+        renderTiles();
+        renderQueueTable();
+      });
+    }
+  }
+})();
+</script>
+

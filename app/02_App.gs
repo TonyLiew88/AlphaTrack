@@ -126,7 +126,8 @@ function SEG_getOverview() {
     modules: {
       extraction: typeof M2_extractDocument === 'function',
       assessment: typeof M3_assessDocuments === 'function',
-      notifications: typeof M4_prepareNotifications === 'function'
+      notifications: typeof M4_prepareNotifications === 'function',
+      integration: typeof M5_runEndToEndMonitoring === 'function'
     }
   };
 }

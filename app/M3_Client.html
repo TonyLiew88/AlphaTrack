@@ -1,0 +1,462 @@
+<script>
+/**
+ * M3_Client · Member 3: Expiry & Risk Analysis (browser side)
+ *
+ * Visualises compliance statuses, expiry countdowns, and dynamic risk levels.
+ * Rules:
+ *   - Overdue (< 0 days) or Missing Mandatory -> CRITICAL RISK
+ *   - Expiring within 5 days (<= 5 days) or Needs Review -> HIGH RISK
+ *   - Expiring within 6 to 30 days -> MEDIUM RISK
+ *   - Greater than 30 days remaining or valid open-ended -> LOW RISK
+ */
+(() => {
+  const E = App.esc;
+  const I = App.icon;
+  const byId = (id) => document.getElementById(id);
+
+  const RISK_CONFIG = {
+    CRITICAL: { label: 'Critical Risk', cls: 'm3-risk-CRITICAL', icon: 'alert', tone: 'tone-danger', foot: 'Overdue or missing' },
+    HIGH: { label: 'High Risk', cls: 'm3-risk-HIGH', icon: 'alert', tone: 'tone-warn', foot: 'Expiring ≤ 5 days or issue' },
+    MEDIUM: { label: 'Medium Risk', cls: 'm3-risk-MEDIUM', icon: 'clock', tone: 'tone-brand', foot: 'Expiring in 6–30 days' },
+    LOW: { label: 'Low Risk', cls: 'm3-risk-LOW', icon: 'checkCircle', tone: 'tone-ok', foot: '> 30 days or compliant' }
+  };
+
+  const STATUS_CONFIG = {
+    EXPIRED: { label: 'Expired', cls: 'm3-st-EXPIRED' },
+    ENDED: { label: 'Ended', cls: 'm3-st-ENDED' },
+    EXPIRING_SOON: { label: 'Expiring Soon', cls: 'm3-st-EXPIRING_SOON' },
+    ENDING_SOON: { label: 'Ending Soon', cls: 'm3-st-ENDING_SOON' },
+    MISSING: { label: 'Missing Document', cls: 'm3-st-MISSING' },
+    NEEDS_REVIEW: { label: 'Needs Review', cls: 'm3-st-NEEDS_REVIEW' },
+    VALID: { label: 'Valid', cls: 'm3-st-VALID' },
+    ACTIVE: { label: 'Active', cls: 'm3-st-ACTIVE' },
+    NO_FIXED_END_DATE: { label: 'Open-ended', cls: 'm3-st-NO_FIXED_END_DATE' }
+  };
+
+  const CLASS_ICON = { CONTRACT: 'contract', LICENCE: 'licence', CERTIFICATE: 'certificate' };
+
+  const st = {
+    summary: null,
+    assessments: [],
+    loading: false,
+    bound: false,
+    filter: { q: '', risk: '', cls: '', status: '', tile: '' }
+  };
+
+  App.registerPage('risk', {
+    show() {
+      bindEvents();
+      load();
+    }
+  });
+
+  /* ---------------------------------------------------------------- Helpers */
+
+  function riskPill(level) {
+    const r = RISK_CONFIG[level] || RISK_CONFIG.LOW;
+    return '<span class="m3-risk-pill ' + r.cls + '">' + I(r.icon, 13) + ' ' + E(level) + '</span>';
+  }
+
+  function statusChip(status) {
+    const s = STATUS_CONFIG[status] || { label: status, cls: 'm3-st-VALID' };
+    return '<span class="m3-status-chip ' + s.cls + '">' + E(s.label) + '</span>';
+  }
+
+  function countdownCell(days, status) {
+    if (days === null || days === undefined || days === '') {
+      if (status === 'MISSING') return '<span class="m3-countdown-badge m3-cd-critical">' + I('alert', 12) + ' Missing File</span>';
+      if (status === 'NO_FIXED_END_DATE') return '<span class="m3-countdown-badge m3-cd-neutral">No Fixed End Date</span>';
+      return '<span class="m3-countdown-badge m3-cd-neutral">—</span>';
+    }
+    const n = Number(days);
+    if (n < 0) {
+      const overdue = Math.abs(n);
+      return '<div class="m3-countdown"><span class="m3-countdown-badge m3-cd-critical">' + I('alert', 12) + ' ' + overdue + 'd overdue</span><span class="cell-sub" style="color:var(--danger)">Expired</span></div>';
+    }
+    if (n === 0) {
+      return '<div class="m3-countdown"><span class="m3-countdown-badge m3-cd-critical">' + I('alert', 12) + ' Expires Today</span><span class="cell-sub" style="color:var(--danger)">0 days left</span></div>';
+    }
+    if (n <= 5) {
+      return '<div class="m3-countdown"><span class="m3-countdown-badge m3-cd-high">' + I('alert', 12) + ' In ' + n + ' day' + (n === 1 ? '' : 's') + '</span><span class="cell-sub" style="color:var(--warn);font-weight:600;">High Risk (≤ 5d)</span></div>';
+    }
+    if (n <= 30) {
+      return '<div class="m3-countdown"><span class="m3-countdown-badge m3-cd-med">' + I('clock', 12) + ' In ' + n + ' days</span><span class="cell-sub">Medium Risk</span></div>';
+    }
+    return '<div class="m3-countdown"><span class="m3-countdown-badge m3-cd-ok">' + I('checkCircle', 12) + ' ' + n + ' days</span><span class="cell-sub">Low Risk (Valid)</span></div>';
+  }
+
+  /* ---------------------------------------------------------------- Loading */
+
+  async function load() {
+    if (st.loading) return;
+    st.loading = true;
+    const banner = byId('m3-banner');
+    if (banner) banner.innerHTML = '';
+
+    try {
+      const [summary, assessments] = await Promise.all([
+        App.api('M3_getRiskSummary'),
+        App.api('M3_getAssessments')
+      ]);
+      st.summary = summary;
+      st.assessments = assessments;
+      render();
+    } catch (err) {
+      if (banner) {
+        banner.innerHTML = '<div class="callout danger enter"><span data-icon="alert"></span><div><strong>Could not load expiry & risk data:</strong> ' + E(err.message) + '</div></div>';
+      }
+    } finally {
+      st.loading = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- Rendering */
+
+  function render() {
+    renderTiles();
+    renderTable();
+  }
+
+  function renderTiles() {
+    const root = byId('m3-tiles');
+    if (!root || !st.summary) return;
+    const s = st.summary;
+    const bR = s.byRisk || {};
+
+    // 5 tiles across: Critical, High (<= 5d), Medium (6-30d), Low (> 30d), Total
+    const tilesData = [
+      { id: 'CRITICAL', label: 'Critical Risk', count: bR.CRITICAL || 0, tone: 'tone-danger', icon: 'alert', foot: 'Overdue or missing' },
+      { id: 'HIGH', label: 'High Risk', count: bR.HIGH || 0, tone: 'tone-warn', icon: 'alert', foot: '≤ 5 days remaining' },
+      { id: 'MEDIUM', label: 'Medium Risk', count: bR.MEDIUM || 0, tone: 'tone-brand', icon: 'clock', foot: '6–30 days remaining' },
+      { id: 'LOW', label: 'Low Risk', count: bR.LOW || 0, tone: 'tone-ok', icon: 'checkCircle', foot: '> 30 days / Compliant' },
+      { id: 'ALL', label: 'Total Assessed', count: s.total || 0, tone: 'tone-neutral', icon: 'layers', foot: 'All monitored items' }
+    ];
+
+    root.innerHTML = tilesData.map((t, i) => {
+      const active = (st.filter.tile === t.id) || (t.id === 'ALL' && !st.filter.tile);
+      return '<button type="button" class="tile" style="--i:' + i + '" data-m3-tile="' + t.id + '" aria-pressed="' + (active ? 'true' : 'false') + '">' +
+        '<div class="tile-top">' +
+          '<span class="tile-label">' + E(t.label) + '</span>' +
+          '<span class="tile-icon ' + t.tone + '" style="width:30px;height:30px;">' + I(t.icon, 16) + '</span>' +
+        '</div>' +
+        '<div class="tile-value" data-count="' + t.count + '">' + t.count + '</div>' +
+        '<div class="tile-foot">' + E(t.foot) + '</div>' +
+      '</button>';
+    }).join('');
+
+    App.countUp(root);
+  }
+
+  function renderTable() {
+    const root = byId('m3-table');
+    const countEl = byId('m3-count');
+    if (!root) return;
+
+    let items = st.assessments || [];
+
+    // Filter by Tile click
+    if (st.filter.tile === 'CRITICAL') items = items.filter((x) => x.riskLevel === 'CRITICAL');
+    else if (st.filter.tile === 'HIGH') items = items.filter((x) => x.riskLevel === 'HIGH');
+    else if (st.filter.tile === 'MEDIUM') items = items.filter((x) => x.riskLevel === 'MEDIUM');
+    else if (st.filter.tile === 'LOW') items = items.filter((x) => x.riskLevel === 'LOW');
+
+    // Filter by Risk dropdown
+    if (st.filter.risk) items = items.filter((x) => x.riskLevel === st.filter.risk);
+
+    // Filter by Status dropdown
+    const GROUPS = {
+      EXPIRED_ENDED: ['EXPIRED', 'ENDED'], EXPIRING_ENDING: ['EXPIRING_SOON', 'ENDING_SOON'],
+      MISSING: ['MISSING'], NEEDS_REVIEW: ['NEEDS_REVIEW'], VALID_ACTIVE: ['VALID', 'ACTIVE', 'NO_FIXED_END_DATE']
+    };
+    if (st.filter.status && GROUPS[st.filter.status]) items = items.filter((x) => GROUPS[st.filter.status].indexOf(x.status) !== -1);
+
+    // Filter by Class dropdown
+    if (st.filter.cls) items = items.filter((x) => x.documentClass === st.filter.cls);
+
+    // Filter by Search Query
+    if (st.filter.q) {
+      const q = st.filter.q.toLowerCase().trim();
+      items = items.filter((x) =>
+        (x.supplierName && x.supplierName.toLowerCase().indexOf(q) !== -1) ||
+        (x.supplierId && x.supplierId.toLowerCase().indexOf(q) !== -1) ||
+        (x.docTypeName && x.docTypeName.toLowerCase().indexOf(q) !== -1) ||
+        (x.docId && x.docId.toLowerCase().indexOf(q) !== -1) ||
+        (x.reason && x.reason.toLowerCase().indexOf(q) !== -1)
+      );
+    }
+
+    if (countEl) countEl.textContent = items.length + ' of ' + (st.assessments || []).length + ' documents';
+
+    if (!items.length) {
+      root.innerHTML = '<div class="card empty" style="padding: 40px 20px;">' +
+        '<span class="empty-art tone-neutral">' + I('clock', 28) + '</span>' +
+        '<h3>No matching documents</h3>' +
+        '<p class="muted">Try adjusting your search criteria or risk filter.</p>' +
+      '</div>';
+      return;
+    }
+
+    let rows = items.map((item) => {
+      const icon = CLASS_ICON[item.documentClass] || 'file';
+      const dueDisplay = item.dueDate ? App.fmtDate(item.dueDate) : '<span class="cell-sub">No expiry</span>';
+
+      return '<tr class="clickable" data-m3-id="' + E(item.assessmentId) + '">' +
+        '<td>' +
+          '<div class="who">' +
+            '<span class="tile-icon tone-' + E(item.documentClass) + '" style="width:30px;height:30px;border-radius:8px;" title="' + E(item.documentClass) + '">' +
+              I(icon, 16) +
+            '</span>' +
+            '<div>' +
+              '<div class="cell-main">' + E(item.docTypeName) + '</div>' +
+              '<div class="cell-sub">' + (item.docId ? E(item.docId) : '<span style="color:var(--danger)">Unsubmitted</span>') + ' · <span class="chip cls-' + E(item.documentClass) + '" style="font-size:10px;padding:1px 6px;">' + E(item.documentClass) + '</span></div>' +
+            '</div>' +
+          '</div>' +
+        '</td>' +
+        '<td>' +
+          '<div class="cell-main">' + E(item.supplierName) + '</div>' +
+          '<div class="cell-sub">' + E(item.supplierId) + ' · <span class="chip crit-' + E(item.criticality) + '" style="font-size:10px;padding:1px 6px;">' + E(item.criticality) + '</span></div>' +
+        '</td>' +
+        '<td>' +
+          '<div class="cell-main">' + dueDisplay + '</div>' +
+          '<div>' + countdownCell(item.daysRemaining, item.status) + '</div>' +
+        '</td>' +
+        '<td>' + statusChip(item.status) + '</td>' +
+        '<td>' + riskPill(item.riskLevel) + '</td>' +
+        '<td style="text-align: right;">' +
+          '<button type="button" class="btn btn-secondary btn-sm" data-m3-view-btn="' + E(item.assessmentId) + '">Dossier</button>' +
+        '</td>' +
+      '</tr>';
+    }).join('');
+
+    root.innerHTML = '<table class="data">' +
+      '<thead>' +
+        '<tr>' +
+          '<th>Document</th>' +
+          '<th>Supplier</th>' +
+          '<th>Expiry &amp; Remaining</th>' +
+          '<th>Compliance Status</th>' +
+          '<th>Risk Level</th>' +
+          '<th style="text-align:right;">Action</th>' +
+        '</tr>' +
+      '</thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>';
+  }
+
+  /* ---------------------------------------------------------------- Detail Modal (Dossier) */
+
+  function openDossier(assessmentId) {
+    const item = (st.assessments || []).find((x) => x.assessmentId === assessmentId);
+    if (!item) return;
+
+    const fileLink = item.fileUrl ? '<a href="' + E(item.fileUrl) + '" target="_blank" rel="noopener">' + I('file', 14) + ' View PDF in Google Drive</a>' : '<span class="cell-sub">No file uploaded</span>';
+    const dueFormatted = item.dueDate ? App.fmtDate(item.dueDate) + ' (' + item.dueDate + ')' : 'None';
+
+    const body = '<div class="m3-dossier">' +
+      '<div class="m3-action-box">' +
+        '<div class="m3-action-title">Recommended Procurement Action</div>' +
+        '<div class="m3-action-text">' + E(item.recommendedAction) + '</div>' +
+      '</div>' +
+
+      '<dl class="m3-dossier-grid">' +
+        '<dt>Supplier</dt><dd><strong>' + E(item.supplierName) + '</strong> (' + E(item.supplierId) + ')</dd>' +
+        '<dt>Supplier Criticality</dt><dd><span class="chip crit-' + E(item.criticality) + '">' + E(item.criticality) + ' Criticality</span></dd>' +
+        '<dt>Internal Officer</dt><dd>' + E(item.internalOfficer || 'Procurement Team') + '</dd>' +
+        '<dt>Supplier Contact</dt><dd>' + E(item.contactPerson || '') + ' &lt;' + E(item.contactEmail || '') + '&gt;</dd>' +
+        '<dt>Requirement</dt><dd>' + E(item.docTypeName) + (item.mandatory ? ' <span class="chip chip-mandatory" style="font-size:10px;padding:1px 6px;">Mandatory</span>' : '') + '</dd>' +
+        '<dt>Document Class</dt><dd><span class="chip cls-' + E(item.documentClass) + '">' + E(item.documentClass) + '</span></dd>' +
+        '<dt>Due / Expiry Date</dt><dd>' + dueFormatted + '</dd>' +
+        '<dt>Countdown</dt><dd>' + countdownCell(item.daysRemaining, item.status) + '</dd>' +
+        '<dt>Compliance Status</dt><dd>' + statusChip(item.status) + '</dd>' +
+        '<dt>Risk Assessment</dt><dd>' + riskPill(item.riskLevel) + '</dd>' +
+        '<dt>Reason / Detected Issue</dt><dd>' + E(item.reason) + '</dd>' +
+        '<dt>Document File</dt><dd>' + fileLink + '</dd>' +
+      '</dl>' +
+    '</div>';
+
+    App.modal({
+      title: 'Compliance Assessment Dossier · ' + item.assessmentId,
+      body: body,
+      wide: true
+    });
+  }
+
+  /* ---------------------------------------------------------------- Threshold Settings Modal */
+
+  function openThresholdsModal() {
+    const thresh = (st.summary && st.summary.thresholds) || {
+      contractNoticeDays: 60,
+      licenceReminderDays: 30,
+      certificateReminderDays: 30,
+      urgentLeadDays: 5
+    };
+
+    const body = '<form id="m3-threshold-form" class="section-gap">' +
+      '<p class="hint">Adjust the advance reminder notice days and urgency windows used to detect impending expiries across all monitored suppliers.</p>' +
+      '<div class="m3-threshold-grid">' +
+        '<div class="field">' +
+          '<label class="field-label" for="m3-cfg-urgent">High Risk Window (Days)</label>' +
+          '<input class="input num" id="m3-cfg-urgent" type="number" min="1" max="30" value="' + (thresh.urgentLeadDays || 5) + '" required>' +
+          '<span class="hint">Expiring in ≤ this number of days shows HIGH RISK (Default: 5 days)</span>' +
+        '</div>' +
+        '<div class="field">' +
+          '<label class="field-label" for="m3-cfg-licence">Licence Reminder Threshold (Days)</label>' +
+          '<input class="input num" id="m3-cfg-licence" type="number" min="1" max="180" value="' + thresh.licenceReminderDays + '" required>' +
+          '<span class="hint">Days before expiry to trigger Medium Risk (Default: 30 days)</span>' +
+        '</div>' +
+        '<div class="field">' +
+          '<label class="field-label" for="m3-cfg-cert">Certificate Reminder Threshold (Days)</label>' +
+          '<input class="input num" id="m3-cfg-cert" type="number" min="1" max="180" value="' + thresh.certificateReminderDays + '" required>' +
+          '<span class="hint">Days before expiry to trigger Medium Risk (Default: 30 days)</span>' +
+        '</div>' +
+        '<div class="field">' +
+          '<label class="field-label" for="m3-cfg-contract">Contract Renewal Notice Window (Days)</label>' +
+          '<input class="input num" id="m3-cfg-contract" type="number" min="1" max="180" value="' + thresh.contractNoticeDays + '" required>' +
+          '<span class="hint">Days before contract end date (Default: 60 days)</span>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px;">' +
+        '<button type="button" class="btn btn-secondary" data-modal-close="true">Cancel</button>' +
+        '<button type="submit" class="btn btn-primary" id="m3-cfg-save-btn">Save Thresholds</button>' +
+      '</div>' +
+    '</form>';
+
+    App.modal({
+      title: 'Configurable Reminder Thresholds',
+      body: body
+    });
+
+    const form = byId('m3-threshold-form');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+          contractNoticeDays: Number(byId('m3-cfg-contract').value),
+          licenceReminderDays: Number(byId('m3-cfg-licence').value),
+          certificateReminderDays: Number(byId('m3-cfg-cert').value),
+          urgentLeadDays: Number(byId('m3-cfg-urgent').value)
+        };
+        const saveBtn = byId('m3-cfg-save-btn');
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+        }
+        try {
+          await App.api('M3_saveThresholds', payload);
+          App.toast('Reminder thresholds updated successfully (High Risk at ≤ ' + payload.urgentLeadDays + ' days)', 'ok');
+          const closeBtn = document.querySelector('[data-modal-close="true"]');
+          if (closeBtn) closeBtn.click();
+          load();
+        } catch (err) {
+          App.toast('Could not save thresholds: ' + err.message, 'danger');
+          if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Thresholds';
+          }
+        }
+      });
+    }
+  }
+
+  /* ---------------------------------------------------------------- Events */
+
+  function bindEvents() {
+    if (st.bound) return;
+    st.bound = true;
+
+    // Refresh button
+    const refreshBtn = byId('m3-refresh');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => load());
+
+    // Run assessment button
+    const runBtn = byId('m3-run-btn');
+    if (runBtn) {
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        const prevText = runBtn.innerHTML;
+        runBtn.innerHTML = '<span class="spinner"></span> Assessing...';
+        try {
+          const res = await App.api('M3_assessDocuments');
+          App.toast('Assessment completed: ' + res.assessments.length + ' document(s) evaluated', 'ok');
+          load();
+        } catch (err) {
+          App.toast('Assessment failed: ' + err.message, 'danger');
+        } finally {
+          runBtn.disabled = false;
+          runBtn.innerHTML = prevText;
+        }
+      });
+    }
+
+    // Thresholds button
+    const cfgBtn = byId('m3-config-btn');
+    if (cfgBtn) cfgBtn.addEventListener('click', () => openThresholdsModal());
+
+    // Search input
+    const searchInput = byId('m3-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        st.filter.q = e.target.value;
+        renderTable();
+      });
+    }
+
+    // Risk filter dropdown
+    const riskSelect = byId('m3-filter-risk');
+    if (riskSelect) {
+      riskSelect.addEventListener('change', (e) => {
+        st.filter.risk = e.target.value;
+        renderTable();
+      });
+    }
+
+    // Status filter dropdown
+    const statusSelect = byId('m3-filter-status');
+    if (statusSelect) {
+      statusSelect.addEventListener('change', (e) => {
+        st.filter.status = e.target.value;
+        renderTable();
+      });
+    }
+
+    // Class filter dropdown
+    const classSelect = byId('m3-filter-class');
+    if (classSelect) {
+      classSelect.addEventListener('change', (e) => {
+        st.filter.cls = e.target.value;
+        renderTable();
+      });
+    }
+
+    // Tile click delegation
+    const tilesRoot = byId('m3-tiles');
+    if (tilesRoot) {
+      tilesRoot.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-m3-tile]');
+        if (!btn) return;
+        const id = btn.getAttribute('data-m3-tile');
+        st.filter.tile = (st.filter.tile === id || id === 'ALL') ? '' : id;
+        renderTiles();
+        renderTable();
+      });
+    }
+
+    // Table click delegation (dossier view)
+    const tableRoot = byId('m3-table');
+    if (tableRoot) {
+      tableRoot.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-m3-view-btn]');
+        if (btn) {
+          e.stopPropagation();
+          openDossier(btn.getAttribute('data-m3-view-btn'));
+          return;
+        }
+        const row = e.target.closest('tr[data-m3-id]');
+        if (row) {
+          openDossier(row.getAttribute('data-m3-id'));
+        }
+      });
+    }
+  }
+})();
+</script>
