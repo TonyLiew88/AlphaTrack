@@ -33,7 +33,7 @@ One Google Apps Script web app for Alpha Electronics Sdn. Bhd. (fictional). This
 5. **Create the tabs.** Choose `SEG_setupDatabase` in the function dropdown and click **Run**.
    - The first time, Google asks for permission. Click **Review permissions**, choose your account, then **Advanced → Go to (project)**. The warning appears because the script is yours and unpublished.
    - This creates all 13 tabs, a Drive folder for supplier documents, and the starting categories and document types.
-6. **Test it.** Run these one at a time and read the **Execution log** underneath. Every line should say PASS.
+6. **Test it.** Run `M1_runAllTests` (in `M1_Suppliers.gs`): it runs all of the checks below and cleans up, and its last line says **ALL PASSED**. Or run them one at a time and read the **Execution log** underneath; every line should say PASS. Tip: the function drop-down only lists functions from the file that is open on the left.
    1. `test_M1_rules` checks the rules, without touching your data.
    2. `test_M1_endToEnd` registers a supplier named `TEST BrightClean Sdn. Bhd.`, uploads, renews and refuses a duplicate, using the real Sheet and Drive.
    3. `M1_removeTestSuppliers` removes the TEST supplier again. Its Drive folder goes to the bin, so it can be restored.
@@ -120,4 +120,4 @@ node dev/build-preview.js
 - **10 MB per file.** Files travel from the browser as text (base64), so 10 MB per file is the practical limit.
 - **Exact duplicates only.** The duplicate check compares exact file contents. A re-scanned copy of the same paper is a different file, so it is accepted.
 - **Links need access.** "View file" opens the file in Google Drive, so it works only for accounts that can see the folder.
-- **Not yet run in real Apps Script.** So far it has been tested only with the offline stand-ins.
+- **Tested in real Google on 11 Nov 2026.** Setup, `M1_runAllTests` and the dataset import ran in the team lead's account. The test supplier used `SUP001`, so the imported suppliers are `SUP002`–`SUP008` (IDs are never reused).
