@@ -1,0 +1,29 @@
+<!-- M1_Page · Member 1: Supplier & Document Management. Rendered by M1_Client. -->
+<div id="m1-list-view" class="section-gap">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">Supplier &amp; Document Management</h1>
+      <p class="page-sub">Register suppliers that Procurement has already approved, choose the documents each must provide, and upload their contracts, licences and certificates.</p>
+    </div>
+    <button type="button" class="btn btn-primary" id="m1-add">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Add existing supplier
+    </button>
+  </div>
+  <div class="status-cards" id="m1-status-cards" role="group" aria-label="Filter by registration status"></div>
+  <div class="card">
+    <div class="toolbar">
+      <label class="visually-hidden" for="m1-search">Search suppliers</label>
+      <input class="input" id="m1-search" type="search" placeholder="Search by name, ID or registration no.">
+      <label class="visually-hidden" for="m1-filter-category">Category</label>
+      <select class="select" id="m1-filter-category"><option value="">All categories</option></select>
+      <label class="visually-hidden" for="m1-filter-status">Registration status</label>
+      <select class="select" id="m1-filter-status"><option value="">All statuses</option></select>
+      <span class="count" id="m1-count" aria-live="polite"></span>
+    </div>
+    <div id="m1-table" class="table-wrap"></div>
+  </div>
+</div>
+
+<div id="m1-wizard-view" class="section-gap" hidden></div>
+<div id="m1-detail-view" class="section-gap" hidden></div>

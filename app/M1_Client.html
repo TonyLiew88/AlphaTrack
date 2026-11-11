@@ -1,0 +1,1055 @@
+<script>
+/**
+ * M1_Client · Member 1: Supplier & Document Management (browser side)
+ * Supplier list, the 5-step registration wizard, supplier detail with document
+ * history, checklist editing and uploads. Talks to M1_Suppliers.gs via App.api().
+ */
+(() => {
+  const E = App.esc;
+  const byId = (id) => document.getElementById(id);
+
+  const STATUS = {
+    DRAFT: { label: 'Draft', cls: 'st-draft', callout: 'neutral' },
+    PENDING_DOCUMENTS: { label: 'Pending documents', cls: 'st-pending-docs', callout: 'warn' },
+    PENDING_VERIFICATION: { label: 'Pending verification', cls: 'st-pending-ver', callout: 'info' },
+    ACTIVE_MONITORING: { label: 'Active monitoring', cls: 'st-active', callout: 'ok' }
+  };
+  const STATUS_ORDER = ['DRAFT', 'PENDING_DOCUMENTS', 'PENDING_VERIFICATION', 'ACTIVE_MONITORING'];
+  const CLASS_LABEL = { CONTRACT: 'Contract', LICENCE: 'Licence', CERTIFICATE: 'Certificate' };
+  const STEPS = ['Supplier information', 'Category', 'Document checklist', 'Upload documents', 'Review & submit'];
+  const EMPTY_INFO = {
+    supplierName: '', registrationNo: '', categoryId: '', goodsServices: '', contactPerson: '',
+    contactEmail: '', internalOfficer: '', criticality: '', procurementRef: ''
+  };
+  const INFO_FIELDS = [
+    { key: 'supplierName', label: 'Supplier company name', required: true, placeholder: 'e.g. BrightClean Sdn. Bhd.' },
+    { key: 'registrationNo', label: 'Company registration number', required: true, hint: 'As shown on the company registration.' },
+    { key: 'contactPerson', label: 'Supplier contact person' },
+    { key: 'contactEmail', label: 'Supplier contact email', required: true, type: 'email', hint: 'Reminders go here. While testing, use an address your team controls.' },
+    { key: 'internalOfficer', label: 'Internal responsible officer', required: true, hint: 'Who at Alpha Electronics looks after this supplier.' },
+    { key: 'procurementRef', label: 'Procurement approval reference', hint: 'If available.' },
+    { key: 'goodsServices', label: 'Goods or services provided', textarea: true, full: true }
+  ];
+  const CRIT_HELP = { LOW: 'Easy to replace', MEDIUM: 'Some impact if disrupted', HIGH: 'Critical to operations' };
+  const ACTION_LABEL = {
+    SUPPLIER_DRAFT_CREATED: 'Draft created', SUPPLIER_DRAFT_SAVED: 'Draft saved', SUPPLIER_REGISTERED: 'Registration submitted',
+    SUPPLIER_UPDATED: 'Details updated', REQUIREMENTS_UPDATED: 'Document checklist updated', DOCUMENT_UPLOADED: 'Document uploaded',
+    DOCUMENT_REPLACED: 'Renewed document uploaded', UPLOAD_REJECTED: 'Upload refused', REGISTRATION_STATUS_CHANGED: 'Registration status changed'
+  };
+  const MIME_BY_EXT = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+  const ACCEPT = '.pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg';
+
+  const st = {
+    loaded: false, loading: null, bound: false, master: null, suppliers: [],
+    filter: { q: '', status: '', category: '' }, wizard: null, detail: null, uploading: {}, openHistory: {}
+  };
+
+  App.registerPage('suppliers', {
+    show() {
+      bindEvents();
+      if (!st.loaded && !st.loading) st.loading = init();
+    }
+  });
+
+  /* ---------------------------------------------------------------- Helpers */
+
+  function typeOf(id) {
+    return st.master.docTypes.find((t) => t.docTypeId === id) || { docTypeId: id, name: id, documentClass: '', hasExpiry: true, defaultReminderDays: 30 };
+  }
+  function categoryName(id) {
+    const c = st.master.categories.find((x) => x.categoryId === id);
+    return c ? c.name : '';
+  }
+  function suggested(categoryId) {
+    return st.master.categoryRequirements
+      .filter((r) => r.categoryId === categoryId && st.master.docTypes.some((t) => t.docTypeId === r.docTypeId))
+      .map((r) => ({
+        requirementId: '', docTypeId: r.docTypeId, label: '', mandatory: r.mandatory,
+        reminderDays: r.reminderDays || typeOf(r.docTypeId).defaultReminderDays, reviewDate: '', source: 'CATEGORY_DEFAULT'
+      }));
+  }
+  function editableReq(r) {
+    return {
+      requirementId: r.requirementId, docTypeId: r.docTypeId, label: r.label || '', mandatory: !!r.mandatory,
+      reminderDays: r.reminderDays, reviewDate: r.reviewDate || '', source: r.source || 'ADDED'
+    };
+  }
+  function pickInfo(src) {
+    const out = {};
+    Object.keys(EMPTY_INFO).forEach((k) => { out[k] = src[k] || ''; });
+    return out;
+  }
+  function reqName(r) {
+    return typeOf(r.docTypeId).name + (r.label ? ' (' + r.label + ')' : '');
+  }
+  function title(word) {
+    return word ? word.charAt(0) + word.slice(1).toLowerCase() : '';
+  }
+  function chip(cls, text, dot) {
+    return '<span class="chip ' + cls + (dot ? ' chip-dot' : '') + '">' + E(text) + '</span>';
+  }
+  function statusChip(s) {
+    const x = STATUS[s] || { label: s || 'Unknown', cls: 'chip-neutral' };
+    return chip(x.cls, x.label, true);
+  }
+  function critChip(c) {
+    return c ? chip('crit-' + c, title(c) + ' criticality') : '';
+  }
+  function classChip(c) {
+    return c ? chip('cls-' + c, CLASS_LABEL[c] || c) : '';
+  }
+  function needChip(mandatory) {
+    return mandatory ? chip('chip-mandatory', 'Mandatory') : chip('chip-optional', 'Optional');
+  }
+  function extractionChip(s) {
+    const map = {
+      QUEUED: ['Queued for AI extraction', 'ex-queued'], PROCESSING: ['AI extraction running', 'ex-queued'],
+      EXTRACTED: ['Read by AI', 'ex-ok'], CORRECTED: ['Read by AI, corrected', 'ex-ok'], NOT_REQUESTED: ['Not sent to AI', 'ex-none']
+    };
+    const m = map[s] || [String(s || 'Unknown').replace(/_/g, ' ').toLowerCase(), 'ex-bad'];
+    return chip(m[1], m[0]);
+  }
+  function showView(name) {
+    ['list', 'wizard', 'detail'].forEach((v) => { byId('m1-' + v + '-view').hidden = v !== name; });
+    window.scrollTo(0, 0);
+  }
+  async function busy(button, label, fn) {
+    const old = button ? button.innerHTML : '';
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = '<span class="spinner" aria-hidden="true"></span>' + E(label);
+    }
+    try {
+      return await fn();
+    } finally {
+      if (button && button.isConnected) {
+        button.disabled = false;
+        button.innerHTML = old;
+      }
+    }
+  }
+  function loadingBlock(text) {
+    return '<div class="card card-pad" aria-busy="true"><p class="muted">' + E(text) + '</p><div class="section-gap" style="margin-top:12px">' +
+      '<div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:85%"></div><div class="skeleton" style="width:40%"></div></div></div>';
+  }
+
+  /* -------------------------------------------------------------- Loading */
+
+  async function init() {
+    byId('m1-table').innerHTML = '<div class="card-pad" aria-busy="true"><div class="section-gap"><div class="skeleton"></div><div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:65%"></div></div></div>';
+    try {
+      const results = await Promise.all([App.api('M1_getBootstrap'), App.api('M1_listSuppliers')]);
+      st.master = results[0];
+      st.suppliers = results[1];
+      st.loaded = true;
+      fillFilterOptions();
+      renderList();
+      if (st.master.masterDataMissing) App.toast('Categories and document types are missing. Run SEG_setupDatabase() once in the Apps Script editor.', 'error');
+    } catch (err) {
+      byId('m1-table').innerHTML = '<div class="empty"><h3>Couldn’t load suppliers</h3><p>' + E(err.message) + '</p>' +
+        '<button type="button" class="btn btn-secondary" data-m1-retry>Try again</button></div>';
+    } finally {
+      st.loading = null;
+    }
+  }
+
+  async function reloadList() {
+    try {
+      st.suppliers = await App.api('M1_listSuppliers');
+      renderList();
+    } catch (err) {
+      App.toast(err.message, 'error');
+    }
+  }
+
+  /* ----------------------------------------------------------------- List */
+
+  function fillFilterOptions() {
+    byId('m1-filter-category').innerHTML = '<option value="">All categories</option>' +
+      st.master.categories.map((c) => '<option value="' + E(c.categoryId) + '">' + E(c.name) + '</option>').join('');
+    byId('m1-filter-status').innerHTML = '<option value="">All statuses</option>' +
+      STATUS_ORDER.map((s) => '<option value="' + s + '">' + E(STATUS[s].label) + '</option>').join('');
+  }
+
+  function renderList() {
+    renderStatusCards();
+    renderTable();
+  }
+
+  function renderStatusCards() {
+    byId('m1-status-cards').innerHTML = STATUS_ORDER.map((s) => {
+      const n = st.suppliers.filter((x) => x.registrationStatus === s).length;
+      return '<button type="button" class="status-card" data-status="' + s + '" aria-pressed="' + (st.filter.status === s) + '">' +
+        '<span class="num">' + n + '</span><span class="lbl">' + statusChip(s) + '</span></button>';
+    }).join('');
+  }
+
+  function renderTable() {
+    const f = st.filter;
+    const q = f.q.trim().toLowerCase();
+    const rows = st.suppliers.filter((s) =>
+      (!f.status || s.registrationStatus === f.status) &&
+      (!f.category || s.categoryId === f.category) &&
+      (!q || [s.supplierName, s.supplierId, s.registrationNo, s.internalOfficer].some((v) => String(v || '').toLowerCase().indexOf(q) >= 0)));
+    byId('m1-count').textContent = rows.length + ' of ' + st.suppliers.length + ' suppliers';
+
+    if (!st.suppliers.length) {
+      byId('m1-table').innerHTML = '<div class="empty"><h3>No suppliers registered yet</h3>' +
+        '<p>Start with a supplier Procurement has already approved.</p>' +
+        '<button type="button" class="btn btn-primary" data-m1-add>Add existing supplier</button></div>';
+      return;
+    }
+    if (!rows.length) {
+      byId('m1-table').innerHTML = '<div class="empty"><h3>No suppliers match these filters</h3>' +
+        '<button type="button" class="btn btn-secondary" data-m1-clear>Clear filters</button></div>';
+      return;
+    }
+    byId('m1-table').innerHTML = '<table class="data"><caption class="visually-hidden">Registered suppliers</caption><thead><tr>' +
+      '<th scope="col">Supplier</th><th scope="col">Category</th><th scope="col">Criticality</th>' +
+      '<th scope="col">Mandatory documents</th><th scope="col">Registration status</th><th scope="col">Last updated</th></tr></thead><tbody>' +
+      rows.map((s) => {
+        const pct = s.mandatoryTotal ? Math.round((s.mandatoryUploaded / s.mandatoryTotal) * 100) : 0;
+        const progress = s.mandatoryTotal
+          ? '<div class="progress"><div class="progress-bar" aria-hidden="true"><div class="progress-fill' + (pct === 100 ? ' full' : '') + '" style="width:' + pct + '%"></div></div>' +
+            '<span class="progress-text">' + s.mandatoryUploaded + ' of ' + s.mandatoryTotal + '</span></div>'
+          : '<span class="cell-sub">No checklist yet</span>';
+        return '<tr class="clickable" data-supplier="' + E(s.supplierId) + '">' +
+          '<td><button type="button" class="link-btn cell-main" data-supplier="' + E(s.supplierId) + '">' + E(s.supplierName) + '</button>' +
+          '<div class="cell-sub">' + E(s.supplierId) + (s.registrationNo ? ' · ' + E(s.registrationNo) : '') + '</div></td>' +
+          '<td>' + E(s.categoryName) + '</td>' +
+          '<td>' + (s.criticality ? chip('crit-' + s.criticality, title(s.criticality)) : '<span class="cell-sub">Not set</span>') + '</td>' +
+          '<td>' + progress + '</td>' +
+          '<td>' + statusChip(s.registrationStatus) + '</td>' +
+          '<td class="cell-sub">' + E(App.fmtDateTime(s.updatedAt)) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /* --------------------------------------------------------------- Events */
+
+  function bindEvents() {
+    if (st.bound) return;
+    st.bound = true;
+
+    byId('m1-add').addEventListener('click', () => openWizard(null));
+    byId('m1-search').addEventListener('input', (e) => { st.filter.q = e.target.value; renderTable(); });
+    byId('m1-filter-category').addEventListener('change', (e) => { st.filter.category = e.target.value; renderTable(); });
+    byId('m1-filter-status').addEventListener('change', (e) => { st.filter.status = e.target.value; renderList(); });
+    byId('m1-status-cards').addEventListener('click', (e) => {
+      const card = e.target.closest('[data-status]');
+      if (!card) return;
+      st.filter.status = st.filter.status === card.dataset.status ? '' : card.dataset.status;
+      byId('m1-filter-status').value = st.filter.status;
+      renderList();
+    });
+    byId('m1-table').addEventListener('click', (e) => {
+      if (e.target.closest('[data-m1-retry]')) { if (!st.loading) st.loading = init(); return; }
+      if (e.target.closest('[data-m1-add]')) { openWizard(null); return; }
+      if (e.target.closest('[data-m1-clear]')) {
+        st.filter = { q: '', status: '', category: '' };
+        byId('m1-search').value = '';
+        byId('m1-filter-category').value = '';
+        byId('m1-filter-status').value = '';
+        renderList();
+        return;
+      }
+      const row = e.target.closest('[data-supplier]');
+      if (row) openDetail(row.dataset.supplier);
+    });
+
+    const wv = byId('m1-wizard-view');
+    wv.addEventListener('click', (e) => {
+      if (!st.wizard) return;
+      const action = e.target.closest('[data-w]');
+      if (action) { wizardAction(action.dataset.w, action); return; }
+      handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w');
+    });
+    wv.addEventListener('input', (e) => {
+      if (!st.wizard) return;
+      if (e.target.dataset.info) st.wizard.dirty = true;
+      if (e.target.dataset.req) { st.wizard.dirty = true; handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w'); }
+    });
+    wv.addEventListener('change', (e) => {
+      if (!st.wizard) return;
+      const t = e.target;
+      if (t.name === 'w-category') { st.wizard.pendingCategory = t.value; st.wizard.dirty = true; return; }
+      if (t.dataset.req) { st.wizard.dirty = true; handleChecklistEvent(e, st.wizard.requirements, renderWizardChecklist, 'w'); return; }
+      if (t.dataset.uploadReq && t.files && t.files[0]) {
+        uploadFile(t.files[0], st.wizard.supplierId, t.dataset.uploadReq);
+        t.value = '';
+      }
+    });
+    bindDrop(wv, () => (st.wizard ? st.wizard.supplierId : ''));
+
+    const dv = byId('m1-detail-view');
+    dv.addEventListener('click', (e) => {
+      const a = e.target.closest('[data-d]');
+      if (!a || !st.detail) return;
+      const act = a.dataset.d;
+      if (act === 'back') { st.detail = null; showView('list'); reloadList(); }
+      if (act === 'continue') openWizard(st.detail);
+      if (act === 'edit-info') editInfoModal();
+      if (act === 'edit-reqs') editRequirementsModal();
+      if (act === 'refresh') refreshDetail();
+      if (act === 'history') {
+        st.openHistory[a.dataset.req] = !st.openHistory[a.dataset.req];
+        renderDetail();
+        const again = dv.querySelector('[data-d="history"][data-req="' + a.dataset.req + '"]');
+        if (again) again.focus();
+      }
+    });
+    dv.addEventListener('change', (e) => {
+      const t = e.target;
+      if (st.detail && t.dataset.uploadReq && t.files && t.files[0]) {
+        uploadFile(t.files[0], st.detail.supplier.supplierId, t.dataset.uploadReq);
+        t.value = '';
+      }
+    });
+    bindDrop(dv, () => (st.detail ? st.detail.supplier.supplierId : ''));
+  }
+
+  function bindDrop(root, getSupplierId) {
+    root.addEventListener('dragover', (e) => {
+      const zone = e.target.closest('[data-drop-req]');
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.add('dragover');
+    });
+    root.addEventListener('dragleave', (e) => {
+      const zone = e.target.closest('[data-drop-req]');
+      if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove('dragover');
+    });
+    root.addEventListener('drop', (e) => {
+      const zone = e.target.closest('[data-drop-req]');
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file && getSupplierId()) uploadFile(file, getSupplierId(), zone.dataset.dropReq);
+    });
+  }
+
+  /* ------------------------------------------------------- Shared form bits */
+
+  function fieldHtml(f, value, error, prefix) {
+    const id = prefix + '-' + f.key;
+    const described = [];
+    let hint = '';
+    if (f.hint) { hint = '<span class="hint" id="' + id + '-hint">' + E(f.hint) + '</span>'; described.push(id + '-hint'); }
+    let err = '';
+    if (error) { err = '<span class="error-text" id="' + id + '-err">' + E(error) + '</span>'; described.push(id + '-err'); }
+    const attrs = 'id="' + id + '" data-info="' + f.key + '"' +
+      (described.length ? ' aria-describedby="' + described.join(' ') + '"' : '') +
+      (error ? ' aria-invalid="true"' : '') + (f.required ? ' aria-required="true"' : '');
+    const control = f.textarea
+      ? '<textarea class="textarea' + (error ? ' invalid' : '') + '" ' + attrs + ' rows="3" maxlength="300">' + E(value) + '</textarea>'
+      : '<input class="input' + (error ? ' invalid' : '') + '" type="' + (f.type || 'text') + '" ' + attrs + ' value="' + E(value) + '"' +
+        (f.placeholder ? ' placeholder="' + E(f.placeholder) + '"' : '') + ' maxlength="120">';
+    return '<div class="field' + (f.full ? ' full' : '') + '"><label class="field-label" for="' + id + '">' + E(f.label) +
+      (f.required ? ' <span class="req-mark" aria-hidden="true">*</span>' : '') + '</label>' + control + hint + err + '</div>';
+  }
+
+  function criticalityHtml(value, error, prefix) {
+    return '<fieldset class="field full" style="border:0;padding:0;margin:0">' +
+      '<legend class="field-label" style="margin-bottom:6px">Supplier criticality <span class="req-mark" aria-hidden="true">*</span></legend>' +
+      '<div class="seg">' + st.master.criticality.map((c) =>
+        '<label><input type="radio" name="' + prefix + '-criticality" value="' + c + '" data-info="criticality"' + (value === c ? ' checked' : '') + '>' +
+        E(title(c)) + ' <span class="muted small" style="font-weight:500">' + E(CRIT_HELP[c] || '') + '</span></label>').join('') + '</div>' +
+      (error ? '<span class="error-text">' + E(error) + '</span>' : '') + '</fieldset>';
+  }
+
+  function categorySelectHtml(value, error, prefix) {
+    const id = prefix + '-categoryId';
+    return '<div class="field"><label class="field-label" for="' + id + '">Supplier category</label>' +
+      '<select class="select' + (error ? ' invalid' : '') + '" id="' + id + '" data-info="categoryId" aria-describedby="' + id + '-hint">' +
+      '<option value="">Choose a category</option>' +
+      st.master.categories.map((c) => '<option value="' + E(c.categoryId) + '"' + (c.categoryId === value ? ' selected' : '') + '>' + E(c.name) + '</option>').join('') +
+      '</select><span class="hint" id="' + id + '-hint">Changing the category doesn’t change the checklist. Use “Edit document checklist” to add its suggested documents.</span>' +
+      (error ? '<span class="error-text">' + E(error) + '</span>' : '') + '</div>';
+  }
+
+  function infoFormHtml(info, errors, prefix, withCategory) {
+    return '<div class="form-grid">' + INFO_FIELDS.map((f) => fieldHtml(f, info[f.key], errors[f.key], prefix)).join('') +
+      (withCategory ? categorySelectHtml(info.categoryId, errors.categoryId, prefix) : '') +
+      criticalityHtml(info.criticality, errors.criticality, prefix) + '</div>';
+  }
+
+  function readInfo(root, base) {
+    const info = Object.assign({}, base);
+    root.querySelectorAll('[data-info]').forEach((el) => {
+      if (el.type === 'radio') { if (el.checked) info[el.dataset.info] = el.value; } else info[el.dataset.info] = el.value;
+    });
+    return info;
+  }
+
+  /** Mirrors the server's rules so mistakes show next to the field. The server checks again. */
+  function validateInfo(info, full) {
+    const e = {};
+    const v = (k) => String(info[k] || '').trim();
+    if (v('supplierName').length < 2) e.supplierName = 'Enter the supplier company name.';
+    if (full && !v('registrationNo')) e.registrationNo = 'Enter the company registration number.';
+    if (full && !v('contactEmail')) e.contactEmail = 'Enter the supplier contact email.';
+    if (v('contactEmail') && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v('contactEmail'))) e.contactEmail = 'This email address doesn’t look right.';
+    if (full && !v('internalOfficer')) e.internalOfficer = 'Enter the internal responsible officer.';
+    if (full && !v('criticality')) e.criticality = 'Choose Low, Medium or High.';
+    return e;
+  }
+
+  function factsHtml(info, supplierId) {
+    const rows = [
+      ['Supplier ID', supplierId || 'Assigned when saved'], ['Company name', info.supplierName], ['Registration no.', info.registrationNo],
+      ['Category', categoryName(info.categoryId)], ['Goods / services', info.goodsServices], ['Contact person', info.contactPerson],
+      ['Contact email', info.contactEmail], ['Responsible officer', info.internalOfficer], ['Criticality', title(info.criticality)],
+      ['Procurement reference', info.procurementRef]
+    ];
+    return '<dl class="facts">' + rows.map((r) => '<dt>' + E(r[0]) + '</dt><dd>' + (r[1] ? E(r[1]) : '<span class="muted">Not given</span>') + '</dd>').join('') + '</dl>';
+  }
+
+  /* ------------------------------------------------------- Checklist editor */
+
+  function checklistHtml(list, prefix) {
+    const rows = list.map((r, i) => {
+      const t = typeOf(r.docTypeId);
+      const idp = prefix + '-req-' + i;
+      return '<tr data-index="' + i + '">' +
+        '<td style="min-width:240px"><div class="cell-main">' + E(t.name) + '</div>' +
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 6px">' + classChip(t.documentClass) +
+          chip('chip-neutral', r.source === 'CATEGORY_DEFAULT' ? 'Category default' : 'Added') + '</div>' +
+          '<label class="visually-hidden" for="' + idp + '-label">Label for ' + E(t.name) + '</label>' +
+          '<input class="input" id="' + idp + '-label" data-req="label" value="' + E(r.label) + '" maxlength="80" placeholder="Optional label, e.g. Public liability"></td>' +
+        '<td><label class="switch"><input type="checkbox" data-req="mandatory"' + (r.mandatory ? ' checked' : '') + '>' + (r.mandatory ? 'Mandatory' : 'Optional') + '</label></td>' +
+        '<td><label class="visually-hidden" for="' + idp + '-days">Reminder days for ' + E(t.name) + '</label>' +
+          '<input class="input days" type="number" min="1" max="730" step="1" id="' + idp + '-days" data-req="reminderDays" value="' + E(r.reminderDays) + '">' +
+          '<div class="cell-sub">days before ' + (t.documentClass === 'CONTRACT' ? 'end date' : 'expiry') + '</div></td>' +
+        '<td>' + (t.hasExpiry
+          ? '<span class="cell-sub">Has an expiry or end date</span>'
+          : '<label class="visually-hidden" for="' + idp + '-review">Review date for ' + E(t.name) + '</label>' +
+            '<input class="input date" type="date" id="' + idp + '-review" data-req="reviewDate" value="' + E(r.reviewDate) + '">' +
+            '<div class="cell-sub">No formal expiry: review on this date</div>') + '</td>' +
+        '<td><button type="button" class="btn btn-danger btn-sm" data-req-remove' +
+          (r.mandatory ? ' disabled title="Make it optional first"' : '') + ' aria-label="Remove ' + E(t.name) + '">Remove</button></td></tr>';
+    }).join('');
+    const options = ['CONTRACT', 'LICENCE', 'CERTIFICATE'].map((cls) =>
+      '<optgroup label="' + CLASS_LABEL[cls] + 's">' + st.master.docTypes.filter((t) => t.documentClass === cls)
+        .map((t) => '<option value="' + E(t.docTypeId) + '">' + E(t.name) + '</option>').join('') + '</optgroup>').join('');
+    return '<div class="table-wrap"><table class="data checklist" data-prefix="' + prefix + '"><caption class="visually-hidden">Document checklist</caption><thead><tr>' +
+      '<th scope="col">Document</th><th scope="col">Required?</th><th scope="col">Reminder</th><th scope="col">Expiry or review</th>' +
+      '<th scope="col"><span class="visually-hidden">Remove</span></th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="5" class="muted">No documents yet. Add at least one mandatory document below.</td></tr>') + '</tbody></table></div>' +
+      '<div class="add-row"><div class="field"><label class="field-label" for="' + prefix + '-add-type">Add a document</label>' +
+      '<select class="select" id="' + prefix + '-add-type">' + options + '</select></div>' +
+      '<div class="field"><label class="field-label" for="' + prefix + '-add-label">Label (optional)</label>' +
+      '<input class="input" id="' + prefix + '-add-label" maxlength="80" placeholder="e.g. Workmen’s compensation"></div>' +
+      '<label class="switch" style="min-height:42px"><input type="checkbox" id="' + prefix + '-add-mandatory" checked>Mandatory</label>' +
+      '<button type="button" class="btn btn-secondary" data-req-add>Add to checklist</button></div>';
+  }
+
+  /** Handles clicks and edits inside a checklist editor. list is changed in place. */
+  function handleChecklistEvent(e, list, rerender, prefix) {
+    const t = e.target;
+    if (e.type === 'click') {
+      if (t.closest('[data-req-remove]')) {
+        const i = Number(t.closest('tr').dataset.index);
+        if (list[i] && !list[i].mandatory) { list.splice(i, 1); rerender(); }
+        return true;
+      }
+      if (t.closest('[data-req-add]')) {
+        const typeId = byId(prefix + '-add-type').value;
+        const label = byId(prefix + '-add-label').value.trim();
+        const mandatory = byId(prefix + '-add-mandatory').checked;
+        if (list.some((r) => r.docTypeId === typeId && (r.label || '') === label)) {
+          App.toast('That document is already on the checklist. Give it a different label to add it twice.', 'error');
+          return true;
+        }
+        list.push({ requirementId: '', docTypeId: typeId, label: label, mandatory: mandatory, reminderDays: typeOf(typeId).defaultReminderDays, reviewDate: '', source: 'ADDED' });
+        rerender();
+        App.toast(typeOf(typeId).name + ' added to the checklist.');
+        return true;
+      }
+      return false;
+    }
+    const field = t.dataset ? t.dataset.req : '';
+    if (!field) return false;
+    const row = t.closest('tr');
+    const r = row ? list[Number(row.dataset.index)] : null;
+    if (!r) return true;
+    if (field === 'mandatory') {
+      if (e.type !== 'change') return true;
+      r.mandatory = t.checked;
+      rerender();
+      const again = document.querySelector('table[data-prefix="' + prefix + '"] tr[data-index="' + row.dataset.index + '"] [data-req="mandatory"]');
+      if (again) again.focus();
+      return true;
+    }
+    if (field === 'reminderDays') r.reminderDays = t.value === '' ? '' : Number(t.value);
+    else r[field] = t.value;
+    return true;
+  }
+
+  function checklistProblem(list) {
+    if (!list.some((r) => r.mandatory)) return 'Mark at least one document as mandatory.';
+    const bad = list.find((r) => { const d = Number(r.reminderDays); return !Number.isInteger(d) || d < 1 || d > 730; });
+    return bad ? reqName(bad) + ': the reminder must be a whole number of days from 1 to 730.' : '';
+  }
+
+  /* --------------------------------------------------------------- Uploads */
+
+  function readAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(new Error('The file could not be read.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadFile(file, supplierId, requirementId) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const mime = MIME_BY_EXT[ext] || file.type || '';
+    let problem = '';
+    if (st.master.upload.types.indexOf(mime) === -1) problem = file.name + ': only PDF, PNG or JPG files can be uploaded.';
+    else if (!file.size) problem = file.name + ' is empty.';
+    else if (file.size > st.master.upload.maxBytes) problem = file.name + ' is larger than 10 MB. Please upload a smaller copy.';
+    if (problem) {
+      st.uploading[requirementId] = { state: 'error', message: problem };
+      rerenderCurrent();
+      return;
+    }
+    st.uploading[requirementId] = { state: 'uploading', fileName: file.name };
+    rerenderCurrent();
+    try {
+      const base64 = await readAsBase64(file);
+      const res = await App.api('M1_uploadDocument', { supplierId: supplierId, requirementId: requirementId, fileName: file.name, mimeType: mime, base64: base64 });
+      delete st.uploading[requirementId];
+      App.toast(file.name + ' saved as ' + res.docId + ' (version ' + res.version + ')' +
+        (res.replaced.length ? ', replacing ' + res.replaced.join(', ') : '') + '. Queued for AI extraction.', 'ok');
+      await refreshAfterUpload(supplierId);
+    } catch (err) {
+      st.uploading[requirementId] = { state: 'error', message: err.message };
+    }
+    rerenderCurrent();
+  }
+
+  async function refreshAfterUpload(supplierId) {
+    try {
+      const detail = await App.api('M1_getSupplierDetail', supplierId);
+      if (st.wizard && st.wizard.supplierId === supplierId) st.wizard.detail = detail;
+      if (st.detail && st.detail.supplier.supplierId === supplierId) st.detail = detail;
+    } catch (err) {
+      App.toast(err.message, 'error');
+    }
+  }
+
+  function rerenderCurrent() {
+    if (!byId('m1-wizard-view').hidden && st.wizard) renderWizard();
+    else if (!byId('m1-detail-view').hidden && st.detail) renderDetail();
+  }
+
+  function uploadState(r) {
+    const u = st.uploading[r.requirementId];
+    const cur = r.current;
+    if (u && u.state === 'uploading') return '<span class="upload-file"><span class="spinner" aria-hidden="true"></span> Uploading ' + E(u.fileName) + '…</span>';
+    if (cur) {
+      return '<span class="upload-file"><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) +
+        ' · ' + E(App.fmtBytes(cur.fileSize)) + ' · ' + E(App.fmtDateTime(cur.uploadedAt)) + '</span>';
+    }
+    return '<span class="upload-file ' + (r.mandatory ? '' : 'muted') + '">' + (r.mandatory ? 'Not uploaded yet' : 'Not uploaded (optional)') + '</span>';
+  }
+
+  function uploadButton(r) {
+    const u = st.uploading[r.requirementId];
+    const cur = r.current;
+    return '<label class="btn btn-secondary btn-sm file-btn">' + (cur ? 'Upload renewed version' : 'Choose file') +
+      '<input type="file" accept="' + ACCEPT + '" data-upload-req="' + E(r.requirementId) + '" aria-label="' +
+      E((cur ? 'Upload a renewed version of ' : 'Upload ') + r.name) + '"' + (u && u.state === 'uploading' ? ' disabled' : '') + '></label>';
+  }
+
+  /* ---------------------------------------------------------------- Wizard */
+
+  function openWizard(detail) {
+    if (!st.master) return;
+    st.uploading = {};
+    if (detail) {
+      const reqs = detail.requirements.map(editableReq);
+      st.wizard = {
+        step: !detail.supplier.categoryId ? 2 : (!reqs.length ? 3 : 4),
+        supplierId: detail.supplier.supplierId, info: pickInfo(detail.supplier), requirements: reqs,
+        errors: {}, dirty: false, detail: detail, done: null, pendingCategory: null
+      };
+    } else {
+      st.wizard = {
+        step: 1, supplierId: '', info: Object.assign({}, EMPTY_INFO, { criticality: 'MEDIUM' }), requirements: [],
+        errors: {}, dirty: false, detail: null, done: null, pendingCategory: null
+      };
+    }
+    showView('wizard');
+    renderWizard();
+  }
+
+  function renderWizard() {
+    const w = st.wizard;
+    const view = byId('m1-wizard-view');
+    if (w.done) { view.innerHTML = renderDone(); return; }
+    const heading = w.supplierId ? 'Continue registration: ' + (w.info.supplierName || w.supplierId) : 'Add existing supplier';
+    const sub = w.supplierId ? 'Supplier ID ' + w.supplierId + ' · saved as a draft' : 'The supplier ID is assigned when you first save.';
+    view.innerHTML =
+      '<div class="wizard-head"><div><h1 class="page-title">' + E(heading) + '</h1><p class="page-sub">' + E(sub) + '</p></div>' +
+      '<button type="button" class="btn btn-secondary" data-w="close">Back to all suppliers</button></div>' +
+      '<ol class="stepper" aria-label="Registration steps">' + STEPS.map((label, i) => {
+        const n = i + 1;
+        const cls = n < w.step ? 'done' : (n === w.step ? 'current' : '');
+        return '<li class="' + cls + '"' + (n === w.step ? ' aria-current="step"' : '') + '><span class="num" aria-hidden="true">' + (n < w.step ? '✓' : n) + '</span>' +
+          '<span><span class="visually-hidden">Step ' + n + (n < w.step ? ', done' : '') + ': </span>' + E(label) + '</span></li>';
+      }).join('') + '</ol>' +
+      '<div class="card"><div class="wizard-body" id="m1-wizard-body">' + stepBody() + '</div><div class="wizard-foot">' + stepFoot() + '</div></div>';
+  }
+
+  function renderWizardChecklist() {
+    const box = byId('m1-checklist');
+    if (box) box.innerHTML = checklistHtml(st.wizard.requirements, 'w');
+  }
+
+  function stepBody() {
+    const w = st.wizard;
+    if (w.step === 1) {
+      return '<div><h2 class="step-title">Supplier information</h2><p class="muted small">Fields marked * are needed to register. A draft only needs the company name.</p></div>' +
+        '<div class="callout info">Only suppliers already approved by Procurement are registered here. Silent Expiry Guardian doesn’t evaluate or approve suppliers.</div>' +
+        infoFormHtml(w.info, w.errors, 'w', false);
+    }
+    if (w.step === 2) {
+      const chosen = w.pendingCategory || w.info.categoryId;
+      return '<div><h2 class="step-title">Supplier category</h2><p class="muted small">The category suggests a document checklist. You can change the checklist in the next step.</p></div>' +
+        '<div class="cat-grid" role="radiogroup" aria-label="Supplier category">' + st.master.categories.map((c) =>
+          '<label class="cat-card"><span class="cat-top"><input type="radio" name="w-category" value="' + E(c.categoryId) + '"' + (chosen === c.categoryId ? ' checked' : '') + '>' +
+          E(c.name) + '</span><span class="muted small">' + E(c.description) + '</span><ul class="cat-docs">' +
+          suggested(c.categoryId).map((d) => '<li>' + E(typeOf(d.docTypeId).name) + (d.mandatory ? '' : ' <span class="muted">(optional)</span>') + '</li>').join('') +
+          '</ul></label>').join('') + '</div>' +
+        (w.errors.categoryId ? '<span class="error-text" role="alert">' + E(w.errors.categoryId) + '</span>' : '');
+    }
+    if (w.step === 3) {
+      return '<div><h2 class="step-title">Document checklist</h2><p class="muted small">Suggested for <strong>' + E(categoryName(w.info.categoryId)) +
+        '</strong>. Changes apply to this supplier only; the category defaults live in the CategoryRequirements tab of the Sheet.</p></div>' +
+        '<div id="m1-checklist">' + checklistHtml(w.requirements, 'w') + '</div>' +
+        (w.errors.requirements ? '<span class="error-text" role="alert">' + E(w.errors.requirements) + '</span>' : '');
+    }
+    if (w.step === 4) {
+      const reqs = w.detail ? w.detail.requirements : [];
+      const mandatory = reqs.filter((r) => r.mandatory);
+      const uploaded = mandatory.filter((r) => r.current).length;
+      return '<div><h2 class="step-title">Upload documents</h2><p class="muted small">Each file goes straight into this supplier’s Google Drive folder and is queued for AI extraction. ' +
+        'You can skip a document and upload it later; the supplier then stays “Pending documents”.</p></div>' +
+        '<div class="callout ' + (uploaded === mandatory.length ? 'ok' : 'neutral') + '" aria-live="polite"><span><strong>' + uploaded + ' of ' + mandatory.length +
+        '</strong> mandatory documents uploaded.</span></div>' +
+        '<div class="upload-list">' + reqs.map((r) =>
+          '<div class="upload-row' + (r.current ? ' done' : '') + '" data-drop-req="' + E(r.requirementId) + '">' +
+          '<div class="upload-info"><span class="upload-name">' + E(r.name) + ' ' + needChip(r.mandatory) + ' ' + classChip(r.documentClass) +
+          (r.current ? ' ' + extractionChip(r.current.extractionStatus) : '') + '</span>' + uploadState(r) +
+          (st.uploading[r.requirementId] && st.uploading[r.requirementId].state === 'error' ? '<span class="error-text" role="alert">' + E(st.uploading[r.requirementId].message) + '</span>' : '') +
+          '</div><div class="upload-actions">' +
+          (r.current ? '<a class="btn btn-ghost btn-sm" href="' + E(r.current.fileUrl) + '" target="_blank" rel="noopener">View file</a>' : '') +
+          uploadButton(r) + '</div></div>').join('') + '</div>' +
+        '<p class="hint">PDF preferred; PNG and JPG scans are accepted. Up to 10 MB each. You can also drag a file onto a row. The same file can’t be uploaded twice.</p>';
+    }
+    const d = w.detail;
+    const missing = d.requirements.filter((r) => r.mandatory && !r.current).map((r) => r.name);
+    const predicted = missing.length ? 'PENDING_DOCUMENTS' : 'PENDING_VERIFICATION';
+    return '<div><h2 class="step-title">Review and submit</h2><p class="muted small">Check the details, then register the supplier. You can still edit everything afterwards.</p></div>' +
+      '<div class="summary-grid"><div><h3 class="card-title" style="margin-bottom:10px">Supplier</h3>' + factsHtml(w.info, w.supplierId) + '</div>' +
+      '<div><h3 class="card-title" style="margin-bottom:10px">Documents</h3><ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px">' +
+      d.requirements.map((r) => '<li>' + E(r.name) + ': ' + (r.current
+        ? '<span style="color:var(--ok);font-weight:600">uploaded (version ' + r.current.version + ')</span>'
+        : (r.mandatory ? '<span style="color:var(--danger);font-weight:600">missing</span>' : '<span class="muted">not uploaded (optional)</span>')) + '</li>').join('') +
+      '</ul></div></div>' +
+      '<div class="callout ' + (missing.length ? 'warn' : 'info') + '"><div>After you register, the status will be ' + statusChip(predicted) + '<br>' +
+      (missing.length
+        ? 'Still missing: ' + E(missing.join(', ')) + '. The supplier is registered, but isn’t treated as complete until these arrive.'
+        : 'All mandatory documents are uploaded. Next they are read by AI Document Analysis.') + '</div></div>';
+  }
+
+  function stepFoot() {
+    const w = st.wizard;
+    const back = w.step > 1 ? '<button type="button" class="btn btn-secondary" data-w="back">Back</button>' : '';
+    const save = w.step <= 3
+      ? '<button type="button" class="btn btn-ghost" data-w="draft">Save as draft</button>'
+      : '<button type="button" class="btn btn-ghost" data-w="later">Finish later</button>';
+    const nextLabel = { 1: 'Continue', 2: 'Continue', 3: 'Save checklist and continue', 4: 'Continue to review' }[w.step];
+    const next = w.step < 5
+      ? '<button type="button" class="btn btn-primary" data-w="next">' + nextLabel + '</button>'
+      : '<button type="button" class="btn btn-primary" data-w="submit">Register supplier</button>';
+    return back + '<span class="spacer"></span>' + save + next;
+  }
+
+  function renderDone() {
+    const d = st.wizard.done;
+    return '<div class="card card-pad section-gap" style="max-width:760px" role="status">' +
+      '<div class="callout ok"><strong>' + E(d.supplier.supplierName) + ' is registered as ' + E(d.supplier.supplierId) + '.</strong></div>' +
+      '<div>Registration status: ' + statusChip(d.supplier.registrationStatus) + '</div><p>' + E(d.registration.explanation) + '</p>' +
+      '<p class="muted small">Registration status shows whether the paperwork is complete. Whether each document is valid, expiring or expired is shown in Expiry &amp; Risk Analysis.</p>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px"><button type="button" class="btn btn-primary" data-w="open-detail">Open supplier</button>' +
+      '<button type="button" class="btn btn-secondary" data-w="another">Register another supplier</button>' +
+      '<button type="button" class="btn btn-ghost" data-w="list">Back to all suppliers</button></div></div>';
+  }
+
+  function captureStep() {
+    const w = st.wizard;
+    const body = byId('m1-wizard-body');
+    if (!body) return;
+    if (w.step === 1) w.info = readInfo(body, w.info);
+    if (w.step === 2) {
+      const picked = body.querySelector('input[name="w-category"]:checked');
+      if (picked) w.pendingCategory = picked.value;
+    }
+  }
+
+  function focusFirstError() {
+    const el = document.querySelector('#m1-wizard-body [aria-invalid="true"], #m1-wizard-body [role="alert"]');
+    if (el) el.focus ? el.focus() : null;
+  }
+
+  async function wizardAction(action, button) {
+    const w = st.wizard;
+    if (action === 'close' || action === 'list') {
+      if (action === 'close') captureStep();
+      if (w.dirty && !w.done && !(await App.confirm('Leave without saving your latest changes?', 'Leave without saving', 'danger'))) return;
+      st.wizard = null;
+      showView('list');
+      reloadList();
+      return;
+    }
+    if (action === 'later') {
+      st.wizard = null;
+      showView('list');
+      reloadList();
+      App.toast('Draft kept. Continue it any time from the supplier list.');
+      return;
+    }
+    if (action === 'back') {
+      captureStep();
+      w.step -= 1;
+      w.errors = {};
+      renderWizard();
+      return;
+    }
+    if (action === 'draft') {
+      captureStep();
+      await busy(button, 'Saving…', () => saveDraft(true));
+      return;
+    }
+    if (action === 'next') { await busy(button, 'Saving…', goNext); return; }
+    if (action === 'submit') { await busy(button, 'Registering…', submitRegistration); return; }
+    if (action === 'open-detail') {
+      const id = w.done.supplier.supplierId;
+      st.wizard = null;
+      openDetail(id);
+      return;
+    }
+    if (action === 'another') openWizard(null);
+  }
+
+  async function goNext() {
+    const w = st.wizard;
+    captureStep();
+    if (w.step === 1) {
+      w.errors = validateInfo(w.info, true);
+      renderWizard();
+      if (Object.keys(w.errors).length) { focusFirstError(); return; }
+      w.step = 2;
+      renderWizard();
+      return;
+    }
+    if (w.step === 2) {
+      const chosen = w.pendingCategory || w.info.categoryId;
+      if (!chosen) {
+        w.errors = { categoryId: 'Choose a category to continue.' };
+        renderWizard();
+        return;
+      }
+      if (!w.requirements.length) {
+        w.requirements = suggested(chosen);
+      } else if (chosen !== w.info.categoryId) {
+        const replace = await App.confirm('Replace the current checklist with the suggested documents for ' + categoryName(chosen) + '?', 'Replace checklist');
+        if (replace) w.requirements = suggested(chosen);
+      }
+      w.info.categoryId = chosen;
+      w.pendingCategory = null;
+      w.errors = {};
+      w.dirty = true;
+      w.step = 3;
+      renderWizard();
+      return;
+    }
+    if (w.step === 3) {
+      const problem = checklistProblem(w.requirements);
+      if (problem) {
+        w.errors = { requirements: problem };
+        renderWizard();
+        return;
+      }
+      const ok = await saveDraft(false);
+      if (ok) {
+        w.step = 4;
+        renderWizard();
+      }
+      return;
+    }
+    if (w.step === 4) {
+      w.step = 5;
+      renderWizard();
+    }
+  }
+
+  /** Saves the wizard as a draft. Returns true if it worked. */
+  async function saveDraft(announce) {
+    const w = st.wizard;
+    if (String(w.info.supplierName || '').trim().length < 2) {
+      w.errors = { supplierName: 'Enter the supplier company name before saving.' };
+      w.step = 1;
+      renderWizard();
+      focusFirstError();
+      return false;
+    }
+    try {
+      const detail = await App.api('M1_saveSupplierDraft', {
+        supplierId: w.supplierId,
+        info: w.info,
+        requirements: w.requirements.length ? w.requirements : null
+      });
+      w.supplierId = detail.supplier.supplierId;
+      w.detail = detail;
+      w.requirements = detail.requirements.map(editableReq);
+      w.dirty = false;
+      w.errors = {};
+      if (announce) {
+        App.toast('Draft saved as ' + w.supplierId + '.', 'ok');
+        renderWizard();
+      }
+      return true;
+    } catch (err) {
+      App.toast(err.message, 'error');
+      return false;
+    }
+  }
+
+  async function submitRegistration() {
+    const w = st.wizard;
+    try {
+      const detail = await App.api('M1_registerSupplier', w.supplierId);
+      w.done = detail;
+      w.dirty = false;
+      renderWizard();
+      App.toast(detail.supplier.supplierId + ' registered.', 'ok');
+    } catch (err) {
+      App.toast(err.message, 'error');
+    }
+  }
+
+  /* ---------------------------------------------------------------- Detail */
+
+  async function openDetail(supplierId) {
+    st.uploading = {};
+    st.openHistory = {};
+    showView('detail');
+    byId('m1-detail-view').innerHTML = loadingBlock('Loading ' + supplierId + '…');
+    try {
+      st.detail = await App.api('M1_getSupplierDetail', supplierId);
+      renderDetail();
+    } catch (err) {
+      st.detail = null;
+      byId('m1-detail-view').innerHTML = '<button type="button" class="btn btn-ghost back" data-m1-back>← All suppliers</button>' +
+        '<div class="card empty"><h3>Couldn’t open ' + E(supplierId) + '</h3><p>' + E(err.message) + '</p></div>';
+      byId('m1-detail-view').querySelector('[data-m1-back]').addEventListener('click', () => { showView('list'); reloadList(); });
+    }
+  }
+
+  async function refreshDetail() {
+    if (!st.detail) return;
+    try {
+      st.detail = await App.api('M1_getSupplierDetail', st.detail.supplier.supplierId);
+      renderDetail();
+      App.toast('Refreshed.');
+    } catch (err) {
+      App.toast(err.message, 'error');
+    }
+  }
+
+  function renderDetail() {
+    const d = st.detail;
+    const s = d.supplier;
+    const st0 = STATUS[s.registrationStatus] || { label: s.registrationStatus, callout: 'neutral' };
+    byId('m1-detail-view').innerHTML =
+      '<button type="button" class="btn btn-ghost back" data-d="back">← All suppliers</button>' +
+      '<div class="detail-head"><div><h1 class="page-title">' + E(s.supplierName) + '</h1><div class="detail-chips">' +
+        chip('chip-neutral', s.supplierId) + (s.categoryName ? chip('chip-neutral', s.categoryName) : '') + critChip(s.criticality) + statusChip(s.registrationStatus) +
+      '</div></div><div class="detail-actions">' +
+        (s.registrationStatus === 'DRAFT' ? '<button type="button" class="btn btn-primary" data-d="continue">Continue registration</button>' : '') +
+        '<button type="button" class="btn btn-secondary" data-d="edit-info">Edit details</button>' +
+        '<button type="button" class="btn btn-secondary" data-d="edit-reqs">Edit document checklist</button>' +
+        (s.driveFolderUrl ? '<a class="btn btn-ghost" href="' + E(s.driveFolderUrl) + '" target="_blank" rel="noopener">Open Drive folder</a>' : '') +
+        '<button type="button" class="btn btn-ghost" data-d="refresh">Refresh</button>' +
+      '</div></div>' +
+      '<div class="callout ' + st0.callout + '"><div><strong>' + E(st0.label) + ':</strong> ' + E(d.registration.explanation) +
+        '<div class="small" style="margin-top:4px;opacity:0.85">This is registration progress. Expiry and compliance status come from Expiry &amp; Risk Analysis.</div></div></div>' +
+      '<div class="detail-grid"><div class="section-gap">' + documentsCard(d) + otherDocumentsCard(d) + '</div>' +
+      '<div class="section-gap detail-side">' + infoCard(d) + activityCard(d) + '</div></div>';
+  }
+
+  function documentsCard(d) {
+    const mandatory = d.requirements.filter((r) => r.mandatory);
+    const uploaded = mandatory.filter((r) => r.current).length;
+    return '<section class="card" aria-labelledby="m1-docs-title"><div class="card-head"><h2 class="card-title" id="m1-docs-title">Documents</h2>' +
+      '<span class="muted small">' + uploaded + ' of ' + mandatory.length + ' mandatory uploaded</span></div>' +
+      (d.requirements.length ? d.requirements.map(requirementCard).join('')
+        : '<div class="empty"><h3>No document checklist yet</h3><p>Use “Edit document checklist” to add the documents this supplier must provide.</p></div>') +
+      '</section>';
+  }
+
+  function requirementCard(r) {
+    const u = st.uploading[r.requirementId];
+    const cur = r.current;
+    const timing = r.hasExpiry
+      ? 'Reminder ' + r.reminderDays + ' days before ' + (r.documentClass === 'CONTRACT' ? 'the end date' : 'expiry')
+      : 'No formal expiry · ' + (r.reviewDate ? 'review on ' + App.fmtDate(r.reviewDate) : 'no review date set');
+    let current;
+    if (u && u.state === 'uploading') current = uploadState(r);
+    else if (cur) {
+      current = '<span><strong>Version ' + cur.version + '</strong> · ' + E(cur.originalFileName || cur.fileName) + '</span>' +
+        '<span class="muted">' + E(App.fmtDateTime(cur.uploadedAt)) + ' · ' + E(App.fmtBytes(cur.fileSize)) + '</span>' +
+        extractionChip(cur.extractionStatus) + '<a href="' + E(cur.fileUrl) + '" target="_blank" rel="noopener">View file</a>';
+    } else {
+      current = r.mandatory ? '<span class="error-text">Missing: not uploaded yet</span>' : '<span class="muted">Not uploaded (optional)</span>';
+    }
+    const older = r.history.filter((h) => h.lifecycleStatus !== 'ACTIVE');
+    const open = !!st.openHistory[r.requirementId];
+    const historyId = 'm1-hist-' + r.requirementId;
+    return '<div class="req-card" data-drop-req="' + E(r.requirementId) + '">' +
+      '<div class="req-top"><span class="req-name">' + E(r.name) + '</span>' + needChip(r.mandatory) + classChip(r.documentClass) + '</div>' +
+      '<div class="req-meta">' + E(timing) + '</div>' +
+      '<div class="req-current">' + current + '</div>' +
+      (u && u.state === 'error' ? '<span class="error-text" role="alert">' + E(u.message) + '</span>' : '') +
+      '<div class="upload-actions">' + uploadButton(r) +
+        (older.length ? '<button type="button" class="btn btn-ghost btn-sm" data-d="history" data-req="' + E(r.requirementId) + '" aria-expanded="' + open +
+          '" aria-controls="' + historyId + '">Version history (' + r.history.length + ')</button>' : '') + '</div>' +
+      (older.length ? '<ul class="history" id="' + historyId + '"' + (open ? '' : ' hidden') + '>' + r.history.map((h) =>
+        '<li>' + chip(h.lifecycleStatus === 'ACTIVE' ? 'st-active' : 'chip-neutral', 'v' + h.version + (h.lifecycleStatus === 'ACTIVE' ? ' current' : ' replaced')) +
+        '<span>' + E(h.docId) + ' · ' + E(h.originalFileName || h.fileName) + '</span>' +
+        '<span class="muted">' + E(App.fmtDateTime(h.uploadedAt)) + (h.replacedByDocId ? ' · replaced by ' + E(h.replacedByDocId) : '') + '</span>' +
+        '<a href="' + E(h.fileUrl) + '" target="_blank" rel="noopener">View</a></li>').join('') + '</ul>' : '') +
+      '</div>';
+  }
+
+  function otherDocumentsCard(d) {
+    if (!d.otherDocuments.length) return '';
+    return '<section class="card" aria-labelledby="m1-other-title"><div class="card-head"><h2 class="card-title" id="m1-other-title">Documents from removed checklist items</h2>' +
+      '<span class="muted small">Kept for history</span></div><ul class="history" style="margin:12px 22px 16px">' + d.otherDocuments.map((h) =>
+        '<li>' + chip('chip-neutral', 'v' + h.version) + '<span>' + E(h.docTypeName) + ' · ' + E(h.docId) + ' · ' + E(h.originalFileName || h.fileName) + '</span>' +
+        '<span class="muted">' + E(App.fmtDateTime(h.uploadedAt)) + '</span><a href="' + E(h.fileUrl) + '" target="_blank" rel="noopener">View</a></li>').join('') +
+      '</ul></section>';
+  }
+
+  function infoCard(d) {
+    const s = d.supplier;
+    return '<section class="card" aria-labelledby="m1-info-title"><div class="card-head"><h2 class="card-title" id="m1-info-title">Supplier details</h2></div>' +
+      '<div class="card-pad">' + factsHtml(s, s.supplierId) +
+      '<dl class="facts" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">' +
+        '<dt>Procurement status</dt><dd>' + E(title(s.procurementStatus) || 'Approved') + '</dd>' +
+        '<dt>Registered</dt><dd>' + (s.submittedAt ? E(App.fmtDateTime(s.submittedAt)) : '<span class="muted">Not submitted yet</span>') + '</dd>' +
+        '<dt>Created</dt><dd>' + E(App.fmtDateTime(s.createdAt)) + '</dd>' +
+        '<dt>Last updated</dt><dd>' + E(App.fmtDateTime(s.updatedAt)) + '</dd>' +
+      '</dl></div></section>';
+  }
+
+  function activityCard(d) {
+    return '<section class="card" aria-labelledby="m1-activity-title"><div class="card-head"><h2 class="card-title" id="m1-activity-title">Activity</h2>' +
+      '<span class="muted small">From the audit log</span></div>' +
+      (d.activity.length ? '<ul class="activity">' + d.activity.map((a) =>
+        '<li><span class="when">' + E(App.fmtDateTime(a.timestamp)) + ' · ' + E(a.actor) + '</span>' +
+        '<span class="what">' + E(ACTION_LABEL[a.action] || a.action) + (a.recordId && a.recordId !== d.supplier.supplierId ? ' · ' + E(a.recordId) : '') + '</span>' +
+        (a.reason ? '<span class="muted">' + E(a.reason) + '</span>' : '') + '</li>').join('') + '</ul>'
+        : '<div class="empty"><p>No activity yet.</p></div>') + '</section>';
+  }
+
+  /* ---------------------------------------------------------------- Modals */
+
+  function editInfoModal() {
+    const s = st.detail.supplier;
+    const full = s.registrationStatus !== 'DRAFT';
+    let info = pickInfo(s);
+    const form = document.createElement('div');
+    form.innerHTML = infoFormHtml(info, {}, 'e', true);
+    App.modal({
+      title: 'Edit supplier details',
+      body: form,
+      wide: true,
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        {
+          label: 'Save changes', kind: 'primary', busyLabel: 'Saving…',
+          onClick: async () => {
+            info = readInfo(form, info);
+            const errors = validateInfo(info, full);
+            if (full && !info.categoryId) errors.categoryId = 'Choose a supplier category.';
+            if (Object.keys(errors).length) {
+              form.innerHTML = infoFormHtml(info, errors, 'e', true);
+              const bad = form.querySelector('[aria-invalid="true"]');
+              if (bad) bad.focus();
+              return false;
+            }
+            st.detail = await App.api('M1_updateSupplierInfo', s.supplierId, info);
+            renderDetail();
+            reloadList();
+            App.toast('Details saved.', 'ok');
+            return true;
+          }
+        }
+      ]
+    });
+  }
+
+  function editRequirementsModal() {
+    const d = st.detail;
+    const list = d.requirements.map(editableReq);
+    const box = document.createElement('div');
+    box.className = 'section-gap';
+    const render = () => {
+      box.innerHTML = '<p class="muted small">Changes apply to ' + E(d.supplier.supplierName) + ' only. Removing a document keeps its uploaded files in the history.</p>' +
+        (d.supplier.categoryId ? '<div><button type="button" class="btn btn-ghost btn-sm" data-req-defaults>Add any missing ' +
+          E(categoryName(d.supplier.categoryId)) + ' defaults</button></div>' : '') +
+        checklistHtml(list, 'm');
+    };
+    render();
+    box.addEventListener('click', (e) => {
+      if (e.target.closest('[data-req-defaults]')) {
+        let added = 0;
+        suggested(d.supplier.categoryId).forEach((sug) => {
+          if (!list.some((r) => r.docTypeId === sug.docTypeId)) { list.push(sug); added++; }
+        });
+        render();
+        App.toast(added ? added + ' document(s) added.' : 'Every default is already on the checklist.');
+        return;
+      }
+      handleChecklistEvent(e, list, render, 'm');
+    });
+    box.addEventListener('input', (e) => handleChecklistEvent(e, list, render, 'm'));
+    box.addEventListener('change', (e) => handleChecklistEvent(e, list, render, 'm'));
+    App.modal({
+      title: 'Edit document checklist',
+      body: box,
+      wide: true,
+      actions: [
+        { label: 'Cancel', kind: 'secondary' },
+        {
+          label: 'Save checklist', kind: 'primary', busyLabel: 'Saving…',
+          onClick: async () => {
+            const problem = d.supplier.registrationStatus === 'DRAFT' && !list.length ? '' : checklistProblem(list);
+            if (problem) { App.toast(problem, 'error'); return false; }
+            st.detail = await App.api('M1_saveSupplierRequirements', d.supplier.supplierId, list);
+            renderDetail();
+            reloadList();
+            App.toast('Checklist saved.', 'ok');
+            return true;
+          }
+        }
+      ]
+    });
+  }
+})();
+</script>

@@ -1,0 +1,14 @@
+# Generated preview (about 2 MB). Rebuild it with: node dev/build-preview.js
+dev/preview.html
+
+# First design, replaced by app/ and dataset/. Kept on this computer only.
+apps-script/
+sample-data/
+
+# Local tools and temporary files
+.claude/
+__pycache__/
+*.tmp.png
+~$*
+.DS_Store
+Thumbs.db

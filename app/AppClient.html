@@ -1,0 +1,188 @@
+<script>
+/**
+ * AppClient · Owner: Member 5 (integration)
+ * Navigation, server calls, toasts and dialogs shared by every page.
+ * Each member's page registers itself with App.registerPage('id', { show() }).
+ */
+const App = (() => {
+  // Member 5: switch this to 'overview' once the Overview page exists.
+  const DEFAULT_PAGE = 'suppliers';
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const state = { info: null, current: null, pages: {} };
+
+  /** Calls a server function and returns a Promise. */
+  function api(fn, ...args) {
+    return new Promise((resolve, reject) => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler((err) => reject(err instanceof Error ? err : new Error(String((err && err.message) || err))))[fn](...args);
+    });
+  }
+
+  function esc(value) {
+    return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  /** '2026-11-11T09:05:00+08:00' -> '11 Nov 2026, 09:05' (Malaysia time, as stored). */
+  function fmtDateTime(iso) {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?/);
+    if (!m) return String(iso || '');
+    return Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1] + (m[4] ? ', ' + m[4] + ':' + m[5] : '');
+  }
+
+  function fmtDate(iso) {
+    const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1] : String(iso || '');
+  }
+
+  function fmtBytes(n) {
+    const size = Number(n) || 0;
+    if (size < 1024) return size + ' B';
+    if (size < 1024 * 1024) return Math.round(size / 1024) + ' KB';
+    return (size / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function toast(message, kind) {
+    const region = document.getElementById('toast-region');
+    const el = document.createElement('div');
+    el.className = 'toast' + (kind ? ' ' + kind : '');
+    el.textContent = message;
+    region.appendChild(el);
+    setTimeout(() => el.remove(), kind === 'error' ? 8000 : 4500);
+  }
+
+  /**
+   * Opens a dialog. actions: [{ label, kind: 'primary'|'secondary'|'danger', onClick(ctx) }]
+   * onClick may return a Promise; return false to keep the dialog open.
+   */
+  function modal(opts) {
+    const root = document.getElementById('modal-root');
+    const id = 'modal-' + Date.now();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML =
+      '<div class="modal' + (opts.wide ? ' wide' : '') + '" role="dialog" aria-modal="true" aria-labelledby="' + id + '">' +
+        '<div class="modal-head"><h2 class="modal-title" id="' + id + '">' + esc(opts.title) + '</h2>' +
+        '<button type="button" class="btn btn-ghost btn-icon" data-close aria-label="Close">' +
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>' +
+        '<div class="modal-body"></div>' +
+        '<div class="modal-foot"></div>' +
+      '</div>';
+    const body = backdrop.querySelector('.modal-body');
+    if (typeof opts.body === 'string') body.innerHTML = opts.body; else if (opts.body) body.appendChild(opts.body);
+    const foot = backdrop.querySelector('.modal-foot');
+    const previousFocus = document.activeElement;
+    const ctx = {
+      el: backdrop,
+      body: body,
+      close() {
+        backdrop.remove();
+        document.removeEventListener('keydown', onKey);
+        if (previousFocus && previousFocus.focus) previousFocus.focus();
+      }
+    };
+    (opts.actions || [{ label: 'Close', kind: 'secondary' }]).forEach((action) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-' + (action.kind || 'secondary');
+      btn.textContent = action.label;
+      btn.addEventListener('click', async () => {
+        if (!action.onClick) return ctx.close();
+        const label = btn.textContent;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>' + esc(action.busyLabel || label);
+        try {
+          const keepOpen = (await action.onClick(ctx)) === false;
+          if (!keepOpen) ctx.close();
+        } catch (err) {
+          toast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
+      foot.appendChild(btn);
+    });
+    function onKey(e) { if (e.key === 'Escape') ctx.close(); }
+    document.addEventListener('keydown', onKey);
+    backdrop.querySelector('[data-close]').addEventListener('click', () => ctx.close());
+    root.appendChild(backdrop);
+    const first = body.querySelector('input, select, textarea, button') || foot.querySelector('button');
+    if (first) first.focus();
+    return ctx;
+  }
+
+  function confirm(message, okLabel, kind) {
+    return new Promise((resolve) => {
+      let answered = false;
+      const ctx = modal({
+        title: 'Please confirm',
+        body: '<p>' + esc(message) + '</p>',
+        actions: [
+          { label: 'Cancel', kind: 'secondary', onClick: () => { answered = true; resolve(false); } },
+          { label: okLabel || 'Continue', kind: kind || 'primary', onClick: () => { answered = true; resolve(true); } }
+        ]
+      });
+      const close = ctx.close;
+      ctx.close = () => { close(); if (!answered) resolve(false); };
+    });
+  }
+
+  function registerPage(id, module) {
+    state.pages[id] = module;
+  }
+
+  function navigate(id) {
+    if (!document.getElementById('page-' + id)) id = DEFAULT_PAGE;
+    state.current = id;
+    document.querySelectorAll('.page').forEach((p) => { p.hidden = p.id !== 'page-' + id; });
+    document.querySelectorAll('.nav-item').forEach((n) => {
+      if (n.dataset.page === id) n.setAttribute('aria-current', 'page'); else n.removeAttribute('aria-current');
+    });
+    const module = state.pages[id];
+    if (module && module.show) module.show();
+    window.scrollTo(0, 0);
+  }
+
+  function showBanner(html, kind) {
+    const banner = document.getElementById('app-banner');
+    banner.className = 'banner ' + (kind || 'warn');
+    banner.innerHTML = html;
+    banner.hidden = false;
+  }
+
+  async function boot() {
+    document.addEventListener('click', (e) => {
+      const nav = e.target.closest('[data-page]');
+      if (nav) navigate(nav.dataset.page);
+      const go = e.target.closest('[data-goto]');
+      if (go) navigate(go.dataset.goto);
+    });
+    try {
+      const info = await api('SEG_getAppInfo');
+      state.info = info;
+      document.getElementById('user-email').textContent = 'Signed in as ' + info.user;
+      const link = document.getElementById('sheet-link');
+      link.href = info.spreadsheetUrl;
+      link.hidden = false;
+      document.getElementById('today-label').textContent = 'Today: ' + fmtDate(info.today) + ' (Malaysia time)';
+      if (info.setupNeeded) {
+        showBanner('<strong>The database isn’t set up yet.</strong>&nbsp;Open the Apps Script editor, run <code>SEG_setupDatabase</code> once, then reload this page. Missing tabs: ' +
+          esc(info.missingTabs.join(', ')) + '.', 'warn');
+      }
+    } catch (err) {
+      showBanner('<strong>Could not reach the server.</strong>&nbsp;' + esc(err.message), 'error');
+    }
+    navigate(DEFAULT_PAGE);
+  }
+
+  return {
+    api: api, esc: esc, fmtDate: fmtDate, fmtDateTime: fmtDateTime, fmtBytes: fmtBytes,
+    toast: toast, modal: modal, confirm: confirm, registerPage: registerPage, navigate: navigate, boot: boot,
+    get info() { return state.info; }
+  };
+})();
+
+document.addEventListener('DOMContentLoaded', () => App.boot());
+</script>
