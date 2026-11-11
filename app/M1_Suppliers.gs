@@ -1199,6 +1199,26 @@ function test_M1_endToEnd() {
  * audit log. Their Drive folders go to the Drive bin, so they can be restored.
  * Run it by hand from the editor; nothing calls it automatically.
  */
+/**
+ * ONE CLICK in the Apps Script editor: runs both Member 1 test suites on the real Sheet and
+ * Drive, then removes the TEST supplier again. The last log line says ALL PASSED, or the run
+ * stops with the FAIL lines above it.
+ */
+function M1_runAllTests() {
+  let failure = null;
+  try {
+    test_M1_rules();
+    test_M1_endToEnd();
+  } catch (err) {
+    failure = err;
+  } finally {
+    M1_removeTestSuppliers();
+  }
+  if (failure) throw failure;
+  console.log('ALL PASSED: Member 1 works on the real Google Sheet and Drive. The TEST supplier has been removed again.');
+  return 'ALL PASSED';
+}
+
 function M1_removeTestSuppliers() {
   return M1_removeSuppliersForTesting((s) => /^TEST /.test(String(s.supplier_name)) && /^TEST-/.test(String(s.registration_no)), 'TEST');
 }

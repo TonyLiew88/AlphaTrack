@@ -217,6 +217,13 @@ step('A folder that cannot be opened stops with a clear message instead of makin
   })()`);
 });
 
+step('M1_runAllTests (the one-click check for the Apps Script editor) passes and cleans up', () => {
+  const result = run('M1_runAllTests()');
+  const left = json('readTable(SEG.TABS.SUPPLIERS).filter(s => /^TEST /.test(s.supplier_name)).length');
+  if (result !== 'ALL PASSED' || left) throw new Error(result + ', ' + left + ' TEST supplier(s) left');
+  return result;
+});
+
 /* ------------------------------------------------- The fictional test dataset (fresh database) */
 const ds = vm.createContext({ console: { log: (...a) => logs.push(a.join(' ')), warn: (...a) => logs.push('WARN ' + a.join(' ')), error: (...a) => logs.push('ERROR ' + a.join(' ')) } });
 const dsLoad = (file, name) => vm.runInContext(fs.readFileSync(file, 'utf8'), ds, { filename: name });
