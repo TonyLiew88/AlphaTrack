@@ -585,6 +585,40 @@ function M4_formatSubject(stage, item, supplier) {
 }
 
 /**
+ * Looks up what the email is about: document name, file, due date and days left.
+ * Uses the Documents, SupplierRequirements, DocumentTypes, Assessments and
+ * RenewalCases tabs. Never throws: missing data just leaves fields blank.
+ */
+function M4_documentFacts(notification) {
+  const facts = { docName: '', fileName: '', dueDate: '', daysRemaining: null };
+  const safeRead = (tab) => { try { return readTable(tab); } catch (err) { return []; } };
+  const docId = notification.doc_id || '';
+  const doc = docId ? (safeRead(SEG.TABS.DOCUMENTS).find((d) => d.doc_id === docId) || {}) : {};
+  let reqId = doc.requirement_id || '';
+  if (!reqId && notification.case_id) {
+    const c = safeRead(SEG.TABS.CASES).find((x) => x.case_id === notification.case_id);
+    if (c) reqId = c.requirement_id || '';
+  }
+  const req = reqId ? (safeRead(SEG.TABS.SUPPLIER_REQS).find((r) => r.requirement_id === reqId) || {}) : {};
+  const typeId = doc.doc_type_id || req.doc_type_id || '';
+  const type = typeId ? (safeRead(SEG.TABS.DOC_TYPES).find((t) => t.doc_type_id === typeId) || {}) : {};
+  facts.docName = type.doc_type_name || req.label || '';
+  facts.fileName = doc.original_file_name || doc.file_name || '';
+
+  // Latest assessment for this document (or for the requirement when nothing was uploaded)
+  const matches = safeRead(SEG.TABS.ASSESSMENTS).filter((a) =>
+    (docId && a.doc_id === docId) || (!docId && reqId && a.requirement_id === reqId));
+  matches.sort((a, b) => String(b.assessed_at).localeCompare(String(a.assessed_at)));
+  if (matches.length) {
+    const m = matches[0];
+    facts.dueDate = m.due_date ? String(m.due_date).slice(0, 10) : '';
+    const days = Number(m.days_remaining);
+    facts.daysRemaining = (m.days_remaining === '' || m.days_remaining === null || isNaN(days)) ? null : days;
+  }
+  return facts;
+}
+
+/**
  * Generates an HTML email body matching corporate branding.
  */
 function M4_renderEmail(notification) {
@@ -597,6 +631,13 @@ function M4_renderEmail(notification) {
   const supName = sup.supplierName || sup.supplier_name || 'Valued Supplier';
   const officer = sup.internalOfficer || sup.internal_officer || 'Alpha Electronics Procurement Officer';
   const stage = notification.stage;
+  const facts = M4_documentFacts(notification);
+  const docStrong = '<strong>' + (facts.docName || 'document') + '</strong>';
+  let dueLine = '';
+  if (facts.dueDate) {
+    const d = facts.daysRemaining;
+    dueLine = facts.dueDate + (d === null ? '' : d < 0 ? ' (' + (-d) + ' days ago)' : d === 0 ? ' (today)' : ' (in ' + d + ' days)');
+  }
 
   let headline = 'Supplier Document Compliance Notice';
   let message = '';
@@ -604,22 +645,22 @@ function M4_renderEmail(notification) {
 
   if (stage === M4.STAGES.FIRST_REMINDER) {
     headline = 'Advance Renewal Reminder';
-    message = 'Our automated compliance monitoring system indicates that your document is scheduled to expire in the near future. To prevent disruptions to our active procurement agreements, please submit the renewed document before the expiry date.';
+    message = 'Our automated compliance monitoring system indicates that your ' + docStrong + ' is scheduled to expire' + (dueLine ? ' on ' + dueLine : ' in the near future') + '. To prevent disruptions to our active procurement agreements, please submit the renewed document before the expiry date.';
     alertBadge = '<span style="display:inline-block;padding:4px 10px;border-radius:4px;background:#FFF2D6;color:#8A4B00;font-weight:700;font-size:12px;">UPCOMING EXPIRY</span>';
   } else if (stage === M4.STAGES.FOLLOW_UP) {
     headline = 'Renewal Follow-Up';
-    message = 'This is a follow-up to our earlier notice. We have not yet received the renewed document, and its due date is close or has passed. Please submit the renewed document as soon as possible to keep your compliance record current.';
+    message = 'This is a follow-up to our earlier notice. We have not yet received your renewed ' + docStrong + ', and its due date' + (dueLine ? ' (' + dueLine + ')' : '') + ' is close or has passed. Please submit the renewed document as soon as possible to keep your compliance record current.';
     alertBadge = '<span style="display:inline-block;padding:4px 10px;border-radius:4px;background:#FEECEB;color:#B42318;font-weight:700;font-size:12px;">URGENT FOLLOW-UP</span>';
   } else if (stage === M4.STAGES.URGENT_ESCALATION) {
-    headline = 'Notice of Expired Certification';
-    message = 'Your required certification or licence has passed its expiration date. Operating without valid documentation represents a compliance violation. Please submit the renewed certificate immediately.';
+    headline = 'Notice of Expired Document' + (facts.docName ? ': ' + facts.docName : '');
+    message = 'Your ' + docStrong + ' has passed its expiration date' + (dueLine ? ' (' + dueLine + ')' : '') + '. This notice is about this document only. Operating without valid documentation represents a compliance violation. Please submit the renewed certificate immediately.';
     alertBadge = '<span style="display:inline-block;padding:4px 10px;border-radius:4px;background:#B42318;color:#FFFFFF;font-weight:700;font-size:12px;">EXPIRED / NON-COMPLIANT</span>';
   } else if (stage === M4.STAGES.SUBMISSION_REQUEST) {
     headline = 'Submission Request for Mandatory Document';
-    message = 'According to our approved procurement policy, your account requires a mandatory document that has not yet been submitted. Please upload the required documentation to complete your compliance register.';
+    message = 'According to our approved procurement policy, your account requires a mandatory ' + docStrong + ', which has not yet been submitted. Please upload the required documentation to complete your compliance register.';
   } else if (stage === M4.STAGES.INTERNAL_ESCALATION) {
     headline = 'Compliance Escalation';
-    message = 'A supplier compliance case has been escalated to you: ' + supName + ' still has an expired, ending or unrenewed document, or the supplier has not responded to our reminder and follow-up. Please contact the supplier and decide whether work with them should continue until a valid document is received. The reason is in the subject line.';
+    message = 'A supplier compliance case has been escalated to you: ' + supName + ' still has an expired, ending or unrenewed ' + docStrong + ', or the supplier has not responded to our reminder and follow-up. Please contact the supplier and decide whether work with them should continue until a valid document is received. The reason is in the subject line.';
     alertBadge = '<span style="display:inline-block;padding:4px 10px;border-radius:4px;background:#B42318;color:#FFFFFF;font-weight:700;font-size:12px;">ESCALATED</span>';
   } else {
     headline = 'Internal Compliance Review Alert';
@@ -662,6 +703,8 @@ function M4_renderEmail(notification) {
       <div class="box">
         <div><strong>Notification ID:</strong> ${notification.notification_id}</div>
         <div><strong>Supplier ID:</strong> ${notification.supplier_id}</div>
+        <div><strong>Document:</strong> ${facts.docName || 'Mandatory document'}${facts.fileName ? ' (' + facts.fileName + ')' : ''}</div>
+        ${dueLine ? '<div><strong>Expiry / due date:</strong> ' + dueLine + '</div>' : ''}
         <div><strong>Document Reference:</strong> ${notification.doc_id || 'Mandatory Requirement'}</div>
         <div><strong>Stage:</strong> ${notification.stage}</div>
         ${internal ? '<div><strong>Supplier:</strong> ' + supName + '</div><div><strong>Case:</strong> ' + (notification.case_id || '-') + '</div>' : ''}
@@ -679,10 +722,12 @@ function M4_renderEmail(notification) {
 
   const plainText = headline + '\n\n' +
     'Dear ' + greeting + ',\n\n' +
-    message + '\n\n' +
+    message.replace(/<[^>]+>/g, '') + '\n\n' +
     'Notification ID: ' + notification.notification_id + '\n' +
     'Supplier ID: ' + notification.supplier_id + '\n' +
     (internal ? 'Supplier: ' + supName + '\nCase: ' + (notification.case_id || '-') + '\n' : '') +
+    'Document: ' + (facts.docName || 'Mandatory document') + (facts.fileName ? ' (' + facts.fileName + ')' : '') + '\n' +
+    (dueLine ? 'Expiry / due date: ' + dueLine + '\n' : '') +
     'Document Reference: ' + (notification.doc_id || 'Mandatory Requirement') + '\n\n' +
     'Sincerely,\n' + signOff + '\nAlpha Electronics Sdn. Bhd.';
 
@@ -779,8 +824,11 @@ function M4_getNotificationDetail(notificationId) {
   if (!n) throw new Error('Notification ' + notificationId + ' not found.');
 
   const rendered = M4_renderEmail(n);
+  let sender = '';
+  try { sender = Session.getEffectiveUser().getEmail(); } catch (err) { sender = ''; }
   return {
     notification: n,
+    sender: sender,
     renderedHtml: rendered.htmlBody,
     plainText: rendered.plainText
   };

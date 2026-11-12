@@ -278,7 +278,7 @@
 
       const body = '<div class="m4-email-preview">' +
         '<div class="m4-preview-head">' +
-          '<div class="m4-preview-row"><span class="m4-preview-label">From:</span><span>Alpha Electronics Procurement &lt;procurement@alpha-electronics.example&gt;</span></div>' +
+          '<div class="m4-preview-row"><span class="m4-preview-label">From:</span><span>' + (detail.sender ? E(detail.sender) + ' <span style="color:#64748B;">(the Gmail account this app runs as)</span>' : 'The Gmail account this app runs as') + '</span></div>' +
           '<div class="m4-preview-row"><span class="m4-preview-label">To:</span><span><strong>' + E(n.recipient) + '</strong> (' + E(n.supplier_id) + ')</span></div>' +
           '<div class="m4-preview-row"><span class="m4-preview-label">Subject:</span><span><strong>' + E(n.subject) + '</strong></span></div>' +
           '<div class="m4-preview-row"><span class="m4-preview-label">Stage:</span><span>' + stagePill(n.stage) + ' · ' + approvalChip(n.approval_status) + '</span></div>' +
