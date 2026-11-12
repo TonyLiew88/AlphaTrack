@@ -125,7 +125,7 @@
       '</div>' +
       '<div class="grid-3-1">' +
         '<div class="section-gap">' + progressCard(d) + categoryCard(d) + activityCard(d) + '</div>' +
-        '<div class="section-gap">' + coverageCard(d, missing) + attentionCard(d) + modulesCard(d) + '</div>' +
+        '<div class="section-gap">' + coverageCard(d, missing) + attentionCard(d) + '</div>' +
       '</div>';
     App.countUp(root);
     root.querySelectorAll('.card').forEach((card, i) => { card.classList.add('enter'); card.style.animationDelay = (120 + i * 60) + 'ms'; });
@@ -212,20 +212,6 @@
       (items ? '<ol class="timeline">' + items + '</ol>' : '<div class="empty"><p>No activity yet.</p></div>') + '</section>';
   }
 
-  function modulesCard(d) {
-    const row = (id) => {
-      const m = MODULES[id];
-      const live = d.modules[m.flag];
-      const clickAttr = id === 'monitoring' ? 'data-ov="run-e2e"' : 'data-page="' + id + '"';
-      return '<li><button type="button" class="list-row" ' + clickAttr + '><span class="tile-icon tone-brand">' + I(m.icon, 17) + '</span>' +
-        '<span class="list-main"><span class="list-title">' + E(m.title) + '</span><br><span class="list-sub">' + E(m.owner) + '</span></span>' +
-        '<span class="chip ' + (live ? 'st-active' : 'chip-neutral') + '">' + (live ? 'Connected' : 'Not connected yet') + '</span>' +
-        '<span class="row-go">' + I(id === 'monitoring' ? 'sparkles' : 'chevronRight', 16) + '</span></button></li>';
-    };
-    return '<section class="card" aria-labelledby="ov-modules"><div class="card-head ruled"><div><h2 class="card-title" id="ov-modules">Monitoring modules</h2>' +
-      '<p class="card-sub">All 5 member modules integrated and functioning seamlessly</p></div></div>' +
-      '<ul class="list">' + ['ai', 'risk', 'notifications', 'monitoring'].map(row).join('') + '</ul></section>';
-  }
 
   async function showModule(id) {
     const root = byId('page-' + id);
