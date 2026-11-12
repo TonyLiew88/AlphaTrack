@@ -260,6 +260,70 @@ step('Saved assessments are refreshed when stale, and Member 4 gets a reminder s
   return 'stale check, reminder stages and daily trigger OK';
 });
 
+step('Document names come from the document types (never just "Document")', () => {
+  const asms = json('M3_getAssessments()');
+  const generic = asms.filter((a) => a.docTypeName === 'Document');
+  check(!generic.length, generic.length + ' assessment(s) have no document type name');
+  const missing = asms.find((a) => a.status === 'MISSING');
+  check(missing && /Product Conformity|Business Registration/.test(missing.reason), 'Missing reason should name the document, got: ' + (missing && missing.reason));
+  return asms.length + ' assessments, e.g. "' + asms[0].docTypeName + '"';
+});
+
+step('The page loads from ONE call and reads each Sheet tab only a few times (speed)', () => {
+  const realRead = ctx.readTable;
+  const reads = {};
+  ctx.readTable = (name) => { reads[name] = (reads[name] || 0) + 1; return realRead(name); };
+  let data;
+  try {
+    data = json('M3_getPageData()');
+  } finally {
+    ctx.readTable = realRead;
+  }
+  check(data.assessments.length > 0 && data.summary.total === data.assessments.length, 'Page data should hold the assessments and a matching summary');
+  check(Array.isArray(data.trend) && data.trend.length >= 1, 'Page data should include the trend');
+  const worst = Object.keys(reads).sort((a, b) => reads[b] - reads[a])[0];
+  const total = Object.keys(reads).reduce((n, k) => n + reads[k], 0);
+  check(reads[worst] <= 3, 'Tab "' + worst + '" was read ' + reads[worst] + ' times');
+  check(total <= 20, 'Too many table reads for one page load: ' + total);
+  return total + ' table reads for the whole page (most: ' + worst + ' x' + reads[worst] + ')';
+});
+
+step('AI brief, Ask box and risk trend (Gemini answer, fallback, saved daily brief, trend rows)', () => {
+  check(run('test_M3_insights()') > 0, 'test_M3_insights ran no checks');
+
+  // The full run above recorded a trend row for its reference date
+  const trend = json('M3_getRiskTrend()');
+  check(trend.length >= 1 && trend[trend.length - 1].total > 0, 'Trend should hold a row with items');
+
+  // Gemini unavailable (the fake only knows document files): rule-based fallback, nothing breaks
+  const fallback = json('M3_getRiskBrief({ refresh: true })');
+  check(fallback.source === 'RULES' && fallback.text.length > 10, 'Brief should fall back to rules, got ' + fallback.source);
+  const askRules = json("M3_askQuestion('which items are critical?')");
+  check(askRules.source === 'RULES' && /critical/i.test(askRules.answer), 'Rule answer to the critical question');
+
+  // Gemini answers: the brief uses it, and is saved for the rest of the day
+  const realFetch = ctx.UrlFetchApp;
+  let calls = 0;
+  ctx.UrlFetchApp = { fetch: () => { calls++; return {
+    getResponseCode: () => 200,
+    getContentText: () => JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Two items need action. Priority: contact Swift Haul.' }] } }] })
+  }; } };
+  try {
+    const fresh = json('M3_getRiskBrief({ refresh: true })');
+    check(fresh.source === 'GEMINI' && /Priority/.test(fresh.text), 'Brief should use the Gemini answer');
+    const again = json('M3_getRiskBrief()');
+    check(again.cached === true && calls === 1, 'Second brief should come from the saved copy (calls: ' + calls + ')');
+    const ans = json("M3_askQuestion('who is most at risk?')");
+    check(ans.source === 'GEMINI', 'Ask box should use the Gemini answer');
+    let threw = false;
+    try { run("M3_askQuestion('   ')"); } catch (e) { threw = true; }
+    check(threw, 'An empty question should be refused');
+  } finally {
+    ctx.UrlFetchApp = realFetch;
+  }
+  return 'Gemini answer, rule fallback, saved brief and trend OK';
+});
+
 /* ------------------------------------------------------------ Output */
 console.log('\n--- Member 3 Test Results ---');
 results.forEach((r) => console.log(r));

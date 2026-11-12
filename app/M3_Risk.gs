@@ -367,7 +367,9 @@ function M3_evaluateMissingRequirement(requirement, supplier, docType, reference
   const status = mandatory ? M3.STATUS.MISSING : M3.STATUS.VALID;
   const riskLevel = M3_calculateRiskLevel(status, null, supplierCrit, mandatory, false);
 
-  const explanation = M3_explainAssessment(status, null, '', 0, docType ? docType.document_class : 'DOCUMENT', [], supplier, requirement);
+  // name the missing document by its type ("Insurance Certificate"), not its code
+  const named = Object.assign({}, requirement, { label: (docType && docType.name) || requirement.label || requirement.doc_type_id });
+  const explanation = M3_explainAssessment(status, null, '', 0, docType ? docType.document_class : 'DOCUMENT', [], supplier, named);
 
   return {
     docId: '',
@@ -386,6 +388,44 @@ function M3_evaluateMissingRequirement(requirement, supplier, docType, reference
   };
 }
 
+/**
+ * Document types by id, from Member 1's master data (M1_loadMasterData().docTypes).
+ * Each type keeps Member 1's names (name, documentClass, hasExpiry) and also gets the
+ * column-style names the rules below read (document_class, has_expiry).
+ * default_reminder_days is left out on purpose: the reminder days come from the
+ * Thresholds box (and a supplier requirement's own reminder_days), not from a per-type default.
+ */
+function M3_docTypeMap() {
+  return M3_memo('docTypes', () => {
+    const map = {};
+    (M1_loadMasterData().docTypes || []).forEach((t) => {
+      map[t.docTypeId] = Object.assign({}, t, { doc_type_id: t.docTypeId, document_class: t.documentClass, has_expiry: t.hasExpiry });
+    });
+    return map;
+  });
+}
+
+/* ------------------------------------------------------------ Speed: read each table once per run
+ * Reading a Sheet is the slow part of Apps Script (about a second each). Within ONE run these
+ * tables do not change, so they are read once and reused. The saved copies are dropped at the
+ * start of every entry point, so nothing is ever older than the call that asked for it.
+ */
+const M3_MEMO = {};
+function M3_memo(key, fn) {
+  if (!Object.prototype.hasOwnProperty.call(M3_MEMO, key)) M3_MEMO[key] = fn();
+  return M3_MEMO[key];
+}
+function M3_clearMemo() {
+  Object.keys(M3_MEMO).forEach((k) => { delete M3_MEMO[k]; });
+}
+function M3_suppliers() { return M3_memo('suppliers', () => M1_listSuppliers()); }
+function M3_monitoredSuppliers() {
+  return M3_suppliers().filter((s) => !s.deactivated && s.registrationStatus !== SEG.REGISTRATION_STATUS.DRAFT);
+}
+function M3_docs() { return M3_memo('docs', () => readTable(SEG.TABS.DOCUMENTS)); }
+function M3_reqs() { return M3_memo('reqs', () => readTable(SEG.TABS.SUPPLIER_REQS)); }
+function M3_extractions() { return M3_memo('extractions', () => readTable(SEG.TABS.EXTRACTIONS)); }
+
 /* ============================================================ Main Assessment Execution */
 
 /**
@@ -401,21 +441,22 @@ function M3_evaluateMissingRequirement(requirement, supplier, docType, reference
 function M3_assessDocuments(options) {
   const opts = options || {};
   const refDate = opts.referenceDate || SEG_today();
+  if (!opts._keepMemo) M3_clearMemo();
 
-  const master = M1_loadMasterData();
-  const docTypeMap = {};
-  (master.documentTypes || []).forEach((t) => { docTypeMap[t.docTypeId] = t; });
+  const docTypeMap = M3_docTypeMap();
 
-  const suppliers = M1_listSuppliers().filter((s) => !s.deactivated && s.registrationStatus !== SEG.REGISTRATION_STATUS.DRAFT);
+  const suppliers = M3_monitoredSuppliers();
   const targetSuppliers = opts.supplierId ? suppliers.filter((s) => s.supplierId === opts.supplierId) : suppliers;
 
-  const allActiveDocs = readTable(SEG.TABS.DOCUMENTS).filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE);
-  const allReqs = readTable(SEG.TABS.SUPPLIER_REQS).filter((r) => SEG_bool(r.active, true));
+  const allActiveDocs = M3_docs().filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE);
+  const allReqs = M3_reqs().filter((r) => SEG_bool(r.active, true));
 
-  const extractions = readTable(SEG.TABS.EXTRACTIONS);
-  const latestExtractionMap = {};
-  extractions.forEach((r) => {
-    latestExtractionMap[r.doc_id + '|' + r.file_id] = r;
+  // One read of the Extractions tab, grouped per document file (Member 2's M2_latestReading
+  // would read the whole tab again for every single document).
+  const extractionRows = {};
+  M3_extractions().forEach((r) => {
+    const k = r.doc_id + '|' + r.file_id;
+    (extractionRows[k] = extractionRows[k] || []).push(r);
   });
 
   const assessmentsToSave = [];
@@ -433,25 +474,24 @@ function M3_assessDocuments(options) {
       const req = supReqs.find((r) => r.requirement_id === doc.requirement_id);
       const docType = docTypeMap[doc.doc_type_id];
 
-      // Retrieve reading for this document
+      // The reading that counts (same rule as M2_latestReading: newest row that did not fail)
       let reading = null;
-      if (typeof M2_latestReading === 'function') {
+      const rows = extractionRows[doc.doc_id + '|' + doc.file_id] || [];
+      const row = typeof M2_bestRow === 'function' ? M2_bestRow(rows) : (rows.length ? rows[rows.length - 1] : null);
+      if (row) {
+        let fields = {};
         try {
-          reading = M2_latestReading(doc.doc_id, doc.file_id);
+          fields = typeof M2_parseJson === 'function' ? M2_parseJson(row.extracted_json) : JSON.parse(row.extracted_json || '{}');
         } catch (e) {
-          reading = null;
+          fields = {};
         }
-      }
-      if (!reading) {
-        const row = latestExtractionMap[doc.doc_id + '|' + doc.file_id];
-        if (row) {
-          reading = {
-            processingStatus: row.processing_status,
-            issues: String(row.issues || '').split(',').map((s) => s.trim()).filter(Boolean),
-            fields: typeof M2_parseJson === 'function' ? M2_parseJson(row.extracted_json) : JSON.parse(row.extracted_json || '{}'),
-            extractedAt: row.extracted_at
-          };
-        }
+        reading = {
+          processingStatus: row.processing_status,
+          approved: SEG.EXTRACTION_OK.indexOf(row.processing_status) !== -1,
+          issues: String(row.issues || '').split(',').map((s) => s.trim()).filter(Boolean),
+          fields: fields,
+          extractedAt: row.extracted_at
+        };
       }
 
       const assessment = M3_evaluateDocument(doc, reading, sup, req, docType, refDate);
@@ -503,6 +543,7 @@ function M3_assessDocuments(options) {
 
   // Calculate summary stats
   const summary = M3_calculateSummary(savedAssessments, targetSuppliers);
+  if (!opts.supplierId && typeof M3_recordSnapshot === 'function') M3_recordSnapshot(summary, refDate);
 
   SEG_audit({
     module: 'M3',
@@ -620,16 +661,14 @@ function M3_isStale(asms) {
   if (oldest === '0') return true;
 
   const monitored = {};
-  M1_listSuppliers().forEach((s) => {
-    if (!s.deactivated && s.registrationStatus !== SEG.REGISTRATION_STATUS.DRAFT) monitored[s.supplierId] = true;
-  });
-  const activeDocs = readTable(SEG.TABS.DOCUMENTS).filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE && monitored[d.supplier_id]);
+  M3_monitoredSuppliers().forEach((s) => { monitored[s.supplierId] = true; });
+  const activeDocs = M3_docs().filter((d) => d.lifecycle_status === SEG.LIFECYCLE.ACTIVE && monitored[d.supplier_id]);
   if (activeDocs.some((d) => !assessedDocs[d.doc_id])) return true;
   const activeIds = {};
   activeDocs.forEach((d) => { activeIds[d.doc_id] = true; });
   if (Object.keys(assessedDocs).some((id) => !activeIds[id])) return true;
 
-  const newestRead = readTable(SEG.TABS.EXTRACTIONS).reduce((m, r) => (String(r.extracted_at || '') > m ? String(r.extracted_at) : m), '');
+  const newestRead = M3_extractions().reduce((m, r) => (String(r.extracted_at || '') > m ? String(r.extracted_at) : m), '');
   return !!newestRead && newestRead > oldest;
 }
 
@@ -637,7 +676,7 @@ function M3_isStale(asms) {
 function M3_freshAssessments(referenceDate) {
   let asms = readTable(SEG.TABS.ASSESSMENTS);
   if (M3_isStale(asms)) {
-    M3_assessDocuments({ referenceDate: referenceDate });
+    M3_assessDocuments({ referenceDate: referenceDate, _keepMemo: true });
     asms = readTable(SEG.TABS.ASSESSMENTS);
   }
   return asms;
@@ -673,25 +712,46 @@ function M3_reminderStage(status, daysRemaining) {
  */
 function M3_getAssessments(options) {
   const opts = options || {};
-  const asms = M3_freshAssessments(opts.referenceDate);
+  if (!opts._keepMemo) M3_clearMemo();
+  const enriched = M3_buildAssessmentViews(M3_freshAssessments(opts.referenceDate));
+  return M3_filterViews(enriched, opts);
+}
 
-  const suppliers = M1_listSuppliers();
+/**
+ * Everything the Expiry & Risk page needs in ONE server call (the page used to make several,
+ * and each one re-read the same Sheets). Gemini is never called here: the saved brief for today
+ * is returned if there is one, otherwise brief is null and the page asks for it separately.
+ * Returns { summary, assessments, trend, brief }.
+ */
+function M3_getPageData() {
+  M3_clearMemo();
+  const asms = M3_freshAssessments();
+  const views = M3_buildAssessmentViews(asms);
+  const summary = M3_calculateSummary(asms, M3_monitoredSuppliers());
+  summary.thresholds = M3_getThresholds();
+  summary.referenceDate = SEG_today();
+  return {
+    summary: summary,
+    assessments: views,
+    trend: typeof M3_getRiskTrend === 'function' ? M3_getRiskTrend(asms) : [],
+    brief: typeof M3_savedBrief === 'function' ? M3_savedBrief(views) : null
+  };
+}
+
+/** Joins the saved assessment rows with supplier, document and document type details. */
+function M3_buildAssessmentViews(asms) {
   const supMap = {};
-  suppliers.forEach((s) => { supMap[s.supplierId] = s; });
+  M3_suppliers().forEach((s) => { supMap[s.supplierId] = s; });
 
-  const docs = readTable(SEG.TABS.DOCUMENTS);
   const docMap = {};
-  docs.forEach((d) => { docMap[d.doc_id] = d; });
+  M3_docs().forEach((d) => { docMap[d.doc_id] = d; });
 
-  const master = M1_loadMasterData();
-  const typeMap = {};
-  (master.documentTypes || []).forEach((t) => { typeMap[t.docTypeId] = t; });
+  const typeMap = M3_docTypeMap();
 
-  const reqs = readTable(SEG.TABS.SUPPLIER_REQS);
   const reqMap = {};
-  reqs.forEach((r) => { reqMap[r.requirement_id] = r; });
+  M3_reqs().forEach((r) => { reqMap[r.requirement_id] = r; });
 
-  const enriched = asms.map((a) => {
+  return asms.map((a) => {
     const sup = supMap[a.supplier_id] || {};
     const doc = docMap[a.doc_id] || {};
     const req = reqMap[a.requirement_id] || {};
@@ -724,8 +784,10 @@ function M3_getAssessments(options) {
       assessedAt: a.assessed_at
     };
   });
+}
 
-  // Optional filtering
+/** Optional filters: riskLevel, status, documentClass, supplierId, query. */
+function M3_filterViews(enriched, opts) {
   let filtered = enriched;
   if (opts.riskLevel) {
     filtered = filtered.filter((item) => item.riskLevel === opts.riskLevel);
@@ -758,9 +820,9 @@ function M3_getAssessments(options) {
  */
 function M3_getRiskSummary(options) {
   const opts = options || {};
+  if (!opts._keepMemo) M3_clearMemo();
   const asms = M3_freshAssessments(opts.referenceDate);
-  const suppliers = M1_listSuppliers().filter((s) => !s.deactivated && s.registrationStatus !== SEG.REGISTRATION_STATUS.DRAFT);
-  const summary = M3_calculateSummary(asms, suppliers);
+  const summary = M3_calculateSummary(asms, M3_monitoredSuppliers());
   summary.thresholds = M3_getThresholds();
   summary.referenceDate = opts.referenceDate || SEG_today();
   return summary;

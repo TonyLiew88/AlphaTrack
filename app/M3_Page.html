@@ -179,6 +179,23 @@
     color: var(--ink);
   }
 
+  .m3-insights { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; margin-bottom: 20px; }
+  @media (max-width: 900px) { .m3-insights { grid-template-columns: minmax(0, 1fr); } }
+  .m3-ins-card { display: flex; flex-direction: column; gap: 10px; }
+  .m3-ins-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .m3-ins-head h2 { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+  .m3-brief { font-size: 14px; line-height: 1.55; color: var(--ink); }
+  .m3-ask { display: flex; gap: 8px; margin-top: 4px; }
+  .m3-ask .input { flex: 1; min-width: 0; }
+  .m3-answer { padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); border-left: 4px solid var(--brand); font-size: 13.5px; line-height: 1.5; }
+  .m3-src { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; background: #EEF0FF; color: #4338CA; }
+  .m3-src-rules { background: #EEF1F6; color: #475569; }
+  .m3-trend-svg { width: 100%; height: auto; display: block; }
+  .m3-tr-c { fill: #B42318; } .m3-tr-h { fill: #D97706; } .m3-tr-m { fill: #0284C7; } .m3-tr-l { fill: #16A34A; }
+  .m3-tr-axis { fill: var(--muted); font-size: 10px; }
+  .m3-tr-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11.5px; color: var(--muted); }
+  .m3-tr-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
+
   .m3-threshold-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -220,6 +237,32 @@
     role="group"
     aria-label="Filter by risk category"
   ></div>
+
+  <!-- AI risk brief + risk trend -->
+  <div class="m3-insights">
+    <div class="card card-pad m3-ins-card">
+      <div class="m3-ins-head">
+        <h2>AI risk brief</h2>
+        <button type="button" class="btn btn-secondary btn-sm" id="m3-brief-btn">
+          <span data-icon="sparkles" data-size="14"></span>Refresh brief
+        </button>
+      </div>
+      <div id="m3-brief" class="m3-brief" aria-live="polite">Loading the brief…</div>
+      <div id="m3-brief-meta" class="hint"></div>
+      <form id="m3-ask-form" class="m3-ask" autocomplete="off">
+        <label class="visually-hidden" for="m3-ask-input">Ask about supplier risk</label>
+        <input id="m3-ask-input" class="input" type="text" maxlength="300"
+          placeholder="Ask AlphaTrack, e.g. what expires in the next 30 days?" />
+        <button type="submit" class="btn btn-primary btn-sm" id="m3-ask-btn">Ask</button>
+      </form>
+      <div id="m3-answer" class="m3-answer" aria-live="polite" hidden></div>
+    </div>
+    <div class="card card-pad m3-ins-card">
+      <div class="m3-ins-head"><h2>Risk trend</h2></div>
+      <div id="m3-trend"></div>
+      <div id="m3-trend-meta" class="hint"></div>
+    </div>
+  </div>
 
   <!-- Main Assessments Table -->
   <div class="card">

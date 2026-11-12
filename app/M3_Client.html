@@ -94,19 +94,114 @@
     if (banner) banner.innerHTML = '';
 
     try {
-      const [summary, assessments] = await Promise.all([
-        App.api('M3_getRiskSummary'),
-        App.api('M3_getAssessments')
-      ]);
-      st.summary = summary;
-      st.assessments = assessments;
+      // ONE server call for the whole page (it used to make three, each re-reading the Sheets)
+      const data = await App.api('M3_getPageData');
+      st.summary = data.summary;
+      st.assessments = data.assessments;
       render();
+      renderTrend(data.trend || []);
+      if (data.brief) showBrief(data.brief);
+      else loadBrief(false); // Gemini is asked in the background; the page is already usable
     } catch (err) {
       if (banner) {
         banner.innerHTML = '<div class="callout danger enter"><span data-icon="alert"></span><div><strong>Could not load expiry & risk data:</strong> ' + E(err.message) + '</div></div>';
       }
     } finally {
       st.loading = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- AI brief, Ask box, trend */
+
+  function srcTag(source) {
+    return source === 'GEMINI'
+      ? '<span class="m3-src">Gemini</span>'
+      : '<span class="m3-src m3-src-rules">Rule-based</span>';
+  }
+
+  function plainHtml(text) {
+    return E(text).replace(/\n+/g, '<br>');
+  }
+
+  function showBrief(brief) {
+    const briefEl = byId('m3-brief');
+    const metaEl = byId('m3-brief-meta');
+    if (!briefEl) return;
+    briefEl.innerHTML = plainHtml(brief.text);
+    if (metaEl) {
+      metaEl.innerHTML = srcTag(brief.source) + ' ' + (brief.cached ? 'Saved today' : 'Just generated') +
+        '. The rules decide each risk level; the AI only explains them.' +
+        (brief.source !== 'GEMINI' && brief.note ? ' (Gemini unavailable: ' + E(brief.note) + ')' : '');
+    }
+  }
+
+  async function loadBrief(refresh) {
+    const briefEl = byId('m3-brief');
+    const btn = byId('m3-brief-btn');
+    if (!briefEl) return;
+    if (btn) btn.disabled = true;
+    briefEl.textContent = 'Asking Gemini…';
+    try {
+      showBrief(await App.api('M3_getRiskBrief', { refresh: !!refresh }));
+    } catch (err) {
+      briefEl.textContent = 'Could not load the brief: ' + err.message;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function renderTrend(list) {
+    const root = byId('m3-trend');
+    const meta = byId('m3-trend-meta');
+    if (!root) return;
+    const days = list.slice(-14);
+    if (!days.length) {
+      root.innerHTML = '<p class="muted">No history yet. Run the risk assessment to record today.</p>';
+      if (meta) meta.textContent = '';
+      return;
+    }
+    const W = 300, H = 130, padL = 22, padB = 18, padT = 6;
+    const max = Math.max.apply(null, days.map((d) => d.total).concat([1]));
+    const plotH = H - padB - padT;
+    const slot = (W - padL) / days.length;
+    const barW = Math.min(26, slot * 0.62);
+    let bars = '';
+    days.forEach((d, i) => {
+      const x = padL + i * slot + (slot - barW) / 2;
+      let y = H - padB;
+      [['l', d.low, 'Low'], ['m', d.medium, 'Medium'], ['h', d.high, 'High'], ['c', d.critical, 'Critical']].forEach((seg) => {
+        if (!seg[1]) return;
+        const h = (seg[1] / max) * plotH;
+        y -= h;
+        bars += '<rect class="m3-tr-' + seg[0] + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + barW.toFixed(1) +
+          '" height="' + h.toFixed(1) + '" rx="2"><title>' + E(App.fmtDate(d.date)) + ': ' + seg[2] + ' ' + seg[1] + '</title></rect>';
+      });
+      if (days.length <= 7 || i % 2 === 0) {
+        bars += '<text class="m3-tr-axis" x="' + (x + barW / 2).toFixed(1) + '" y="' + (H - 4) + '" text-anchor="middle">' + E(d.date.slice(8, 10) + '/' + d.date.slice(5, 7)) + '</text>';
+      }
+    });
+    const axis = '<text class="m3-tr-axis" x="0" y="' + (padT + 8) + '">' + max + '</text><text class="m3-tr-axis" x="0" y="' + (H - padB) + '">0</text>';
+    root.innerHTML = '<svg class="m3-trend-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Items by risk level per day">' + axis + bars + '</svg>' +
+      '<div class="m3-tr-legend"><span><i class="m3-tr-c"></i>Critical</span><span><i class="m3-tr-h"></i>High</span><span><i class="m3-tr-m"></i>Medium</span><span><i class="m3-tr-l"></i>Low</span></div>';
+    if (meta) meta.textContent = days.length === 1
+      ? 'One day recorded so far. A new day is added each time the daily check runs.'
+      : 'Last ' + days.length + ' day(s) recorded by the daily check.';
+  }
+
+  async function ask(question) {
+    const out = byId('m3-answer');
+    const btn = byId('m3-ask-btn');
+    if (!out) return;
+    out.hidden = false;
+    out.textContent = 'Thinking…';
+    if (btn) btn.disabled = true;
+    try {
+      const res = await App.api('M3_askQuestion', question);
+      out.innerHTML = plainHtml(res.answer) + '<div style="margin-top:6px">' + srcTag(res.source) + '</div>';
+    } catch (err) {
+      out.textContent = 'Could not answer: ' + err.message;
+    } finally {
+      if (btn) btn.disabled = false;
     }
   }
 
@@ -363,6 +458,19 @@
   function bindEvents() {
     if (st.bound) return;
     st.bound = true;
+
+    // AI brief and Ask box
+    const briefBtn = byId('m3-brief-btn');
+    if (briefBtn) briefBtn.addEventListener('click', () => loadBrief(true));
+    const askForm = byId('m3-ask-form');
+    if (askForm) {
+      askForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const input = byId('m3-ask-input');
+        const q = input ? input.value.trim() : '';
+        if (q) ask(q);
+      });
+    }
 
     // Refresh button
     const refreshBtn = byId('m3-refresh');
