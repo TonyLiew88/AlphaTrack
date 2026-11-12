@@ -223,7 +223,7 @@
         '<td>' + statusChip(item.status) + '</td>' +
         '<td>' + riskPill(item.riskLevel) + '</td>' +
         '<td style="text-align: right;">' +
-          '<button type="button" class="btn btn-secondary btn-sm" data-m3-view-btn="' + E(item.assessmentId) + '">Dossier</button>' +
+          '<button type="button" class="btn btn-secondary btn-sm" data-m3-view-btn="' + E(item.assessmentId) + '">Details</button>' +
         '</td>' +
       '</tr>';
     }).join('');
@@ -275,7 +275,7 @@
     '</div>';
 
     App.modal({
-      title: 'Compliance Assessment Dossier · ' + item.assessmentId,
+      title: 'Document Details · ' + item.assessmentId,
       body: body,
       wide: true
     });
